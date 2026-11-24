@@ -32,6 +32,16 @@ export interface OfflineSyncQueueItem {
   payload: Record<string, unknown>;
 }
 
+export interface CloudConfigMeta {
+  configured: boolean;
+  source: 'external-file' | 'env' | 'unset';
+  configFilePath: string;
+  appsScriptUrl: string;
+  hasToken: boolean;
+  googleSheetUrl?: string;
+  googleDriveFolderUrl?: string;
+}
+
 export interface UseCloudSyncParams {
   isAuthenticated: boolean;
   products: ProductItem[];
@@ -68,6 +78,9 @@ export function useCloudSync({
   }, [googleConfig]);
 
   const [isCloudConfigured, setIsCloudConfigured] = useState<boolean>(false);
+  const [cloudConfigMeta, setCloudConfigMeta] = useState<CloudConfigMeta | null>(
+    null
+  );
   const isDbConfigured = useMemo(
     () => isCloudConfigured || isDatabaseConfigured(googleConfig),
     [isCloudConfigured, googleConfig]
@@ -137,6 +150,47 @@ export function useCloudSync({
   useEffect(() => {
     latestStateRef.current = { products, orders, categories, storeSettings };
   }, [products, orders, categories, storeSettings]);
+
+  const refreshCloudConfigMeta =
+    useCallback(async (): Promise<CloudConfigMeta | null> => {
+      try {
+        const res = await fetch('/api/cloud-config', {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (!res.ok) return null;
+        const meta = (await res.json().catch(() => null)) as CloudConfigMeta | null;
+        if (meta && typeof meta === 'object') {
+          setCloudConfigMeta(meta);
+          setIsCloudConfigured(Boolean(meta.configured));
+          if (meta.googleSheetUrl || meta.googleDriveFolderUrl) {
+            setGoogleConfig((prev) => {
+              const nextSheet =
+                prev.GOOGLE_SHEET_URL || meta.googleSheetUrl || '';
+              const nextDrive =
+                prev.GOOGLE_DRIVE_FOLDER_URL || meta.googleDriveFolderUrl || '';
+              if (
+                nextSheet === prev.GOOGLE_SHEET_URL &&
+                nextDrive === prev.GOOGLE_DRIVE_FOLDER_URL
+              ) {
+                return prev;
+              }
+              const updated = sanitizeGoogleConfig({
+                ...prev,
+                GOOGLE_SHEET_URL: nextSheet,
+                GOOGLE_DRIVE_FOLDER_URL: nextDrive,
+              });
+              googleConfigRef.current = updated;
+              return updated;
+            });
+          }
+          return meta;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }, []);
 
   const persistStateToServer = useCallback(
     async (patch: {
@@ -578,6 +632,16 @@ export function useCloudSync({
         }));
       }
 
+      const isCompletelyEmptyRemote =
+        (!Array.isArray(data.products) || data.products.length === 0) &&
+        (!Array.isArray(data.orders) || data.orders.length === 0) &&
+        (!Array.isArray(data.categories) || data.categories.length === 0) &&
+        !data.storeSettings;
+
+      if (isCompletelyEmptyRemote) {
+        return false;
+      }
+
       const remoteFingerprint = JSON.stringify({
         p: Array.isArray(data.products)
           ? data.products.map((p) => ({
@@ -788,7 +852,7 @@ export function useCloudSync({
             ok: false,
             pulledFromSheet: false,
             error:
-              'APPS_SCRIPT_URL atau APPS_SCRIPT_TOKEN belum dikonfigurasi di server environment.',
+              'Database Apps Script belum dihubungkan. Silakan isi URL Web App (/exec) & API Token di menu Setting.',
           };
         }
 
@@ -837,7 +901,12 @@ export function useCloudSync({
   const handleConnectOrUpdateDatabaseConfig = useCallback(
     async (
       newCfg: PermanentGoogleConfig
-    ): Promise<{ ok: boolean; pulledFromSheet: boolean; error?: string }> => {
+    ): Promise<{
+      ok: boolean;
+      pulledFromSheet: boolean;
+      autoInitialized?: boolean;
+      error?: string;
+    }> => {
       const cleanCfg = sanitizeGoogleConfig(newCfg);
       googleConfigRef.current = cleanCfg;
       setGoogleConfig(cleanCfg);
@@ -848,6 +917,19 @@ export function useCloudSync({
       await persistStateToServer({ googleConfig: cleanCfg });
 
       const result = await handleSyncTwoWay(true);
+      let autoInitialized = false;
+
+      // If the newly connected Google Sheet is brand-new and completely empty,
+      // automatically push the initial catalog/categories/settings so it works right away.
+      if (
+        result.ok &&
+        !result.pulledFromSheet &&
+        latestStateRef.current.products.length > 0
+      ) {
+        await handleSyncAllToCloud();
+        autoInitialized = true;
+      }
+
       await persistStateToServer({
         googleConfig: googleConfigRef.current,
         storeSettings: sanitizeStoreSettings(
@@ -857,12 +939,13 @@ export function useCloudSync({
         products: latestStateRef.current.products,
         orders: capOrdersForLocalStorage(latestStateRef.current.orders),
       });
-      return result;
+      return { ...result, autoInitialized };
     },
     [
       broadcastStateChange,
       persistStateToServer,
       handleSyncTwoWay,
+      handleSyncAllToCloud,
       notifyStorageError,
     ]
   );
@@ -879,19 +962,22 @@ export function useCloudSync({
     const bootstrapFromServerAndSheet = async () => {
       const activeCfg = googleConfigRef.current;
 
-      try {
-        const statusRes = await fetch('/api/cloud?mode=status', {
-          method: 'GET',
-          credentials: 'include',
-        });
-        if (statusRes.ok && !cancelled) {
-          const statusData = (await statusRes.json().catch(() => ({}))) as {
-            configured?: boolean;
-          };
-          setIsCloudConfigured(Boolean(statusData.configured));
+      const meta = await refreshCloudConfigMeta();
+      if (!meta && !cancelled) {
+        try {
+          const statusRes = await fetch('/api/cloud?mode=status', {
+            method: 'GET',
+            credentials: 'include',
+          });
+          if (statusRes.ok && !cancelled) {
+            const statusData = (await statusRes.json().catch(() => ({}))) as {
+              configured?: boolean;
+            };
+            setIsCloudConfigured(Boolean(statusData.configured));
+          }
+        } catch {
+          // ignore status probe failure
         }
-      } catch {
-        // ignore status probe failure
       }
 
       try {
@@ -992,6 +1078,7 @@ export function useCloudSync({
     };
   }, [
     isAuthenticated,
+    refreshCloudConfigMeta,
     flushOfflineQueue,
     handleSyncTwoWay,
     persistStateToServer,
@@ -1004,6 +1091,7 @@ export function useCloudSync({
 
   return {
     googleConfig,
+    cloudConfigMeta,
     isCloudConfigured,
     isDbConfigured,
     twoWaySyncStatus,
@@ -1013,6 +1101,7 @@ export function useCloudSync({
     latestStateRef,
     lastMutationAtRef,
     broadcastStateChange,
+    refreshCloudConfigMeta,
     pushToCloudDatabase,
     flushOfflineQueue,
     handleSyncTwoWay,

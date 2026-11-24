@@ -1,33 +1,15 @@
 import { getAuthenticatedSession } from './_lib/auth.js';
 import {
+  getServerCloudConfig,
+  isAllowedAppsScriptUrl,
+} from './_lib/cloudConfig.js';
+import {
   type ApiRequest,
   type ApiResponse,
   isValidCsrfOrigin,
   readJsonBody,
   sendJson,
 } from './_lib/http.js';
-
-function getServerCloudConfig(): {
-  appsScriptUrl: string;
-  appsScriptToken: string;
-} {
-  const appsScriptUrl = (process.env.APPS_SCRIPT_URL || '').trim();
-  const appsScriptToken = (process.env.APPS_SCRIPT_TOKEN || '').trim();
-  return { appsScriptUrl, appsScriptToken };
-}
-
-function isAllowedAppsScriptUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'https:') return false;
-    return (
-      parsed.hostname === 'script.google.com' ||
-      parsed.hostname === 'script.googleusercontent.com'
-    );
-  } catch {
-    return false;
-  }
-}
 
 function stripSensitiveSettings(
   obj: unknown
@@ -50,9 +32,9 @@ export default async function handler(
   }
 
   const method = (req.method || 'GET').toUpperCase();
-  const { appsScriptUrl, appsScriptToken } = getServerCloudConfig();
+  const { appsScriptUrl, appsScriptToken } = await getServerCloudConfig();
 
-  // Status probe so UI knows whether server env vars are configured without leaking URL/token
+  // Status probe so UI knows whether server/external cloud config is ready without leaking token
   if (method === 'GET' && req.query?.mode === 'status') {
     const configured =
       Boolean(appsScriptUrl) &&

@@ -9,6 +9,7 @@ import sessionHandler from './api/session.js';
 import changePasswordHandler from './api/change-password.js';
 import setupAdminHandler from './api/setup-admin.js';
 import cloudHandler from './api/cloud.js';
+import cloudConfigHandler from './api/cloud-config.js';
 import { getAuthenticatedSession } from './api/_lib/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,6 +34,9 @@ function sanitizeStoreSettingsRecord(
 ): Record<string, unknown> | undefined {
   if (!settings || typeof settings !== 'object') return settings;
   const copy = { ...settings };
+  if (copy.storeName === 'PinkPOS Resto') {
+    copy.storeName = 'SukaPOS';
+  }
   delete copy.loginUsername;
   delete copy.loginPassword;
   return copy;
@@ -95,6 +99,7 @@ async function startServer() {
   app.all('/api/change-password', (req, res) => void changePasswordHandler(req, res));
   app.all('/api/setup-admin', (req, res) => void setupAdminHandler(req, res));
   app.all('/api/cloud', (req, res) => void cloudHandler(req, res));
+  app.all('/api/cloud-config', (req, res) => void cloudConfigHandler(req, res));
 
   // Load persisted state across browsers / sessions (authenticated only)
   app.get('/api/state', async (req, res) => {

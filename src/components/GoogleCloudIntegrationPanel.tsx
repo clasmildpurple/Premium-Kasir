@@ -7,12 +7,15 @@ import {
   isDatabaseConfigured,
 } from '../data/posData';
 import {
+  FONT_FAMILY_PRESETS,
   Language,
   StoreBrandingSettings,
   THEME_COLOR_PRESETS,
   TRANSLATIONS,
+  resolveFontCssFamily,
 } from '../data/i18nAndSettings';
 import { BrandLogo } from './PosIllustrations';
+import type { CloudConfigMeta } from '../hooks/useCloudSync';
 import {
   Check,
   Copy,
@@ -30,17 +33,25 @@ import {
   RefreshCw,
   Save,
   Store,
+  Type,
   User,
 } from 'lucide-react';
 
 interface GoogleCloudIntegrationPanelProps {
   config: PermanentGoogleConfig;
+  cloudConfigMeta?: CloudConfigMeta | null;
+  onRefreshCloudConfig?: () => Promise<CloudConfigMeta | null>;
   isCloudConfigured?: boolean;
   offlineQueueCount?: number;
   onFlushOfflineQueue?: () => Promise<void>;
   onUpdateConfig: (
     newConfig: PermanentGoogleConfig
-  ) => Promise<{ ok: boolean; pulledFromSheet: boolean; error?: string } | void>;
+  ) => Promise<{
+    ok: boolean;
+    pulledFromSheet: boolean;
+    autoInitialized?: boolean;
+    error?: string;
+  } | void>;
   storeSettings: StoreBrandingSettings;
   onUpdateStoreSettings: (
     newSettings: StoreBrandingSettings,
@@ -60,6 +71,8 @@ export const GoogleCloudIntegrationPanel: React.FC<
   GoogleCloudIntegrationPanelProps
 > = ({
   config,
+  cloudConfigMeta,
+  onRefreshCloudConfig,
   isCloudConfigured = false,
   offlineQueueCount = 0,
   onFlushOfflineQueue,
@@ -77,7 +90,12 @@ export const GoogleCloudIntegrationPanel: React.FC<
   const isId = storeSettings.language === 'id';
   const primaryColor = storeSettings.primaryColor || '#FF2457';
 
-  // Non-secret Cloud Shortcut Links State (Google Sheet & Drive Folder only — /exec URL & token stay strictly on server)
+  // Cloud & External Database Config State (Apps Script URL + Token stored in external file outside src/dist, never in browser localStorage)
+  const [appsScriptUrl, setAppsScriptUrl] = useState(
+    cloudConfigMeta?.appsScriptUrl || ''
+  );
+  const [appsScriptToken, setAppsScriptToken] = useState('');
+  const [showAppsScriptToken, setShowAppsScriptToken] = useState(false);
   const [googleSheetUrl, setGoogleSheetUrl] = useState(config.GOOGLE_SHEET_URL);
   const [googleDriveUrl, setGoogleDriveUrl] = useState(
     config.GOOGLE_DRIVE_FOLDER_URL
@@ -89,12 +107,21 @@ export const GoogleCloudIntegrationPanel: React.FC<
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [pullCloudSuccess, setPullCloudSuccess] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const dbConfigured = isCloudConfigured || isDatabaseConfigured(config);
+  const dbConfigured =
+    Boolean(cloudConfigMeta?.configured) ||
+    isCloudConfigured ||
+    isDatabaseConfigured(config);
 
   React.useEffect(() => {
     setGoogleSheetUrl(config.GOOGLE_SHEET_URL);
     setGoogleDriveUrl(config.GOOGLE_DRIVE_FOLDER_URL);
   }, [config.GOOGLE_SHEET_URL, config.GOOGLE_DRIVE_FOLDER_URL]);
+
+  React.useEffect(() => {
+    if (cloudConfigMeta?.appsScriptUrl !== undefined) {
+      setAppsScriptUrl(cloudConfigMeta.appsScriptUrl);
+    }
+  }, [cloudConfigMeta?.appsScriptUrl]);
 
   // Store Branding & Theme State
   const [storeName, setStoreName] = useState(storeSettings.storeName);
@@ -107,6 +134,12 @@ export const GoogleCloudIntegrationPanel: React.FC<
   );
   const [selectedColor, setSelectedColor] = useState(
     storeSettings.primaryColor
+  );
+  const [hexCodeInput, setHexCodeInput] = useState(
+    storeSettings.primaryColor.toUpperCase()
+  );
+  const [selectedFont, setSelectedFont] = useState(
+    storeSettings.fontFamily || 'Plus Jakarta Sans'
   );
   const [uploadedLogoFile, setUploadedLogoFile] = useState<{
     data: string;
@@ -146,6 +179,8 @@ export const GoogleCloudIntegrationPanel: React.FC<
     setLogoType(storeSettings.logoType);
     setCustomLogoUrl(storeSettings.customLogoUrl);
     setSelectedColor(storeSettings.primaryColor);
+    setHexCodeInput(storeSettings.primaryColor.toUpperCase());
+    setSelectedFont(storeSettings.fontFamily || 'Plus Jakarta Sans');
     setTaxEnabled(storeSettings.taxEnabled !== false);
     setTaxName(storeSettings.taxName || 'PBF');
     setTaxRate(String(storeSettings.taxRate ?? 5));
@@ -158,13 +193,14 @@ export const GoogleCloudIntegrationPanel: React.FC<
     try {
       const updated: StoreBrandingSettings = {
         ...storeSettings,
-        storeName: storeName.trim() || 'PinkPOS Resto',
+        storeName: storeName.trim() || 'SukaPOS',
         storeTagline: storeTagline.trim(),
         logoType,
         customLogoUrl: uploadedLogoFile
           ? uploadedLogoFile.data
           : customLogoUrl.trim(),
         primaryColor: selectedColor,
+        fontFamily: selectedFont,
       };
       await Promise.all([
         onUpdateStoreSettings(updated, uploadedLogoFile || undefined),
@@ -177,16 +213,45 @@ export const GoogleCloudIntegrationPanel: React.FC<
     }
   };
 
-  const handleSelectColor = (hex: string) => {
+  const handleSelectColor = (hex: string, persistNow = true) => {
     setSelectedColor(hex);
-    onUpdateStoreSettings({
+    setHexCodeInput(hex.toUpperCase());
+    if (persistNow) {
+      void onUpdateStoreSettings({
+        ...storeSettings,
+        storeName: storeName.trim() || storeSettings.storeName,
+        storeTagline: storeTagline.trim(),
+        logoType,
+        customLogoUrl: uploadedLogoFile
+          ? uploadedLogoFile.data
+          : customLogoUrl.trim(),
+        primaryColor: hex,
+        fontFamily: selectedFont,
+      });
+    }
+  };
+
+  const handleHexTextChange = (rawValue: string) => {
+    const cleaned = rawValue.toUpperCase().replace(/[^#0-9A-F]/g, '');
+    const normalized = cleaned.startsWith('#') ? cleaned : `#${cleaned}`;
+    setHexCodeInput(normalized.slice(0, 7));
+    if (/^#[0-9A-F]{6}$/.test(normalized)) {
+      setSelectedColor(normalized);
+    }
+  };
+
+  const handleSelectFont = (fontId: string) => {
+    setSelectedFont(fontId);
+    void onUpdateStoreSettings({
       ...storeSettings,
       storeName: storeName.trim() || storeSettings.storeName,
+      storeTagline: storeTagline.trim(),
       logoType,
       customLogoUrl: uploadedLogoFile
         ? uploadedLogoFile.data
         : customLogoUrl.trim(),
-      primaryColor: hex,
+      primaryColor: selectedColor,
+      fontFamily: fontId,
     });
   };
 
@@ -300,6 +365,26 @@ export const GoogleCloudIntegrationPanel: React.FC<
     }
   };
 
+  const handleGenerateRandomToken = () => {
+    const bytes = new Uint8Array(24);
+    if (
+      typeof window !== 'undefined' &&
+      window.crypto &&
+      typeof window.crypto.getRandomValues === 'function'
+    ) {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+    }
+    const token = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(
+      ''
+    );
+    setAppsScriptToken(token);
+    setShowAppsScriptToken(true);
+  };
+
   const handleSavePermanentConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingConfig) return;
@@ -307,9 +392,59 @@ export const GoogleCloudIntegrationPanel: React.FC<
     setSavedBanner(null);
     setConfigErrorBanner(null);
     try {
+      const trimmedScriptUrl = appsScriptUrl.trim();
+      const trimmedScriptToken = appsScriptToken.trim();
+      const isSwitchingUrl =
+        Boolean(trimmedScriptUrl) &&
+        Boolean(cloudConfigMeta?.appsScriptUrl) &&
+        trimmedScriptUrl !== cloudConfigMeta?.appsScriptUrl;
+      const effectiveSheetUrl =
+        isSwitchingUrl && googleSheetUrl.trim() === config.GOOGLE_SHEET_URL
+          ? ''
+          : googleSheetUrl.trim();
+      let savedExternalPath: string | undefined;
+
+      if (trimmedScriptUrl || trimmedScriptToken) {
+        const cfgRes = await fetch('/api/cloud-config', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: JSON.stringify({
+            appsScriptUrl: trimmedScriptUrl,
+            appsScriptToken: trimmedScriptToken,
+            googleSheetUrl: effectiveSheetUrl,
+            googleDriveFolderUrl: googleDriveUrl.trim(),
+          }),
+        });
+
+        const cfgData = (await cfgRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          configFilePath?: string;
+        };
+
+        if (!cfgRes.ok || !cfgData.ok) {
+          setConfigErrorBanner(
+            cfgData.error ||
+              (isId
+                ? 'Gagal menyimpan konfigurasi database Apps Script.'
+                : 'Failed to save Apps Script database configuration.')
+          );
+          return;
+        }
+
+        savedExternalPath = cfgData.configFilePath;
+        setAppsScriptToken('');
+        setShowAppsScriptToken(false);
+        await onRefreshCloudConfig?.();
+      }
+
       const result = await onUpdateConfig({
         ...config,
-        GOOGLE_SHEET_URL: googleSheetUrl.trim(),
+        GOOGLE_SHEET_URL: effectiveSheetUrl,
         GOOGLE_DRIVE_FOLDER_URL: googleDriveUrl.trim(),
         LAST_SYNCED: new Date().toLocaleTimeString('id-ID'),
       });
@@ -317,23 +452,35 @@ export const GoogleCloudIntegrationPanel: React.FC<
         setConfigErrorBanner(
           result.error ||
             (isId
-              ? 'Tautan tersimpan, namun server proxy /api/cloud gagal menarik data Google Sheet.'
-              : 'Links saved, but /api/cloud proxy failed to pull data from Google Sheet.')
+              ? 'Konfigurasi tersimpan, namun server proxy /api/cloud gagal menarik data Google Sheet.'
+              : 'Configuration saved, but /api/cloud proxy failed to pull data from Google Sheet.')
+        );
+      } else if (result && result.autoInitialized) {
+        setSavedBanner(
+          isId
+            ? `Database baru berhasil terhubung & otomatis diinisialisasi ke Google Sheets!`
+            : `New database connected & automatically initialized to Google Sheets!`
         );
       } else if (result && result.pulledFromSheet) {
         setSavedBanner(
           isId
-            ? 'Tautan tersimpan & data berhasil ditarik melalui /api/cloud!'
-            : 'Links saved & data pulled securely via /api/cloud!'
+            ? `Database terhubung & data Google Sheet berhasil dimuat!`
+            : `Database connected & Google Sheet data loaded!`
         );
       } else {
         setSavedBanner(
           isId
-            ? 'Tautan pintasan Google Sheet & Drive tersimpan!'
-            : 'Google Sheet & Drive shortcut links saved!'
+            ? `Pengaturan database berhasil disimpan${savedExternalPath ? ` ke ${savedExternalPath}` : ''}!`
+            : `Database configuration saved${savedExternalPath ? ` to ${savedExternalPath}` : ''}!`
         );
       }
-      setTimeout(() => setSavedBanner(null), 4000);
+      setTimeout(() => setSavedBanner(null), 5000);
+    } catch {
+      setConfigErrorBanner(
+        isId
+          ? 'Terjadi kesalahan jaringan saat menyimpan pengaturan database.'
+          : 'Network error while saving database configuration.'
+      );
     } finally {
       setIsSavingConfig(false);
     }
@@ -389,7 +536,10 @@ export const GoogleCloudIntegrationPanel: React.FC<
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-[#F8F9FA] border border-slate-100">
+            <div
+              style={{ fontFamily: resolveFontCssFamily(selectedFont) }}
+              className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-[#F8F9FA] border border-slate-100"
+            >
               <BrandLogo
                 size="sm"
                 color={selectedColor}
@@ -397,7 +547,7 @@ export const GoogleCloudIntegrationPanel: React.FC<
                 customLogoUrl={customLogoUrl}
               />
               <span className="font-extrabold text-xs text-[#2D3748]">
-                {storeName || 'PinkPOS'}
+                {storeName || 'SukaPOS'}
               </span>
             </div>
           </div>
@@ -414,7 +564,7 @@ export const GoogleCloudIntegrationPanel: React.FC<
                 required
                 value={storeName}
                 onChange={(e) => setStoreName(e.target.value)}
-                placeholder="PinkPOS Resto"
+                placeholder="SukaPOS"
                 className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-[#2D3748] focus:outline-none focus:border-slate-400"
               />
             </div>
@@ -445,7 +595,7 @@ export const GoogleCloudIntegrationPanel: React.FC<
                     <button
                       key={preset.hex}
                       type="button"
-                      onClick={() => handleSelectColor(preset.hex)}
+                      onClick={() => handleSelectColor(preset.hex, true)}
                       title={preset.name}
                       style={{ backgroundColor: preset.hex }}
                       className={`w-8 h-8 rounded-xl transition-transform cursor-pointer flex items-center justify-center ${
@@ -459,15 +609,67 @@ export const GoogleCloudIntegrationPanel: React.FC<
                   );
                 })}
 
-                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#F8F9FA] border border-slate-200 text-xs font-mono cursor-pointer">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#F8F9FA] border border-slate-200">
                   <input
                     type="color"
+                    aria-label={t.appThemeColorLabel}
                     value={selectedColor}
-                    onChange={(e) => handleSelectColor(e.target.value)}
-                    className="w-5 h-5 rounded border-0 cursor-pointer bg-transparent"
+                    onChange={(e) => handleSelectColor(e.target.value, false)}
+                    onBlur={(e) => handleSelectColor(e.target.value, true)}
+                    className="w-6 h-6 rounded border-0 cursor-pointer bg-transparent p-0"
                   />
-                  <span>{selectedColor.toUpperCase()}</span>
-                </label>
+                  <input
+                    type="text"
+                    aria-label="Hex color code"
+                    value={hexCodeInput}
+                    onChange={(e) => handleHexTextChange(e.target.value)}
+                    onBlur={() => {
+                      if (/^#[0-9A-F]{6}$/.test(hexCodeInput)) {
+                        handleSelectColor(hexCodeInput, true);
+                      } else {
+                        setHexCodeInput(selectedColor.toUpperCase());
+                      }
+                    }}
+                    maxLength={7}
+                    className="w-18 bg-transparent text-xs font-mono font-bold text-[#2D3748] focus:outline-none uppercase"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="store-font-selector"
+                className="flex items-center gap-1.5 text-xs font-bold text-[#2D3748] mb-1.5"
+              >
+                <Type className="w-4 h-4" style={{ color: selectedColor }} />
+                <span>{t.appFontLabel}</span>
+              </label>
+              <select
+                id="store-font-selector"
+                value={selectedFont}
+                onChange={(e) => handleSelectFont(e.target.value)}
+                className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-[#2D3748] focus:outline-none focus:border-slate-400 cursor-pointer"
+              >
+                {FONT_FAMILY_PRESETS.map((font) => (
+                  <option key={font.id} value={font.id}>
+                    {font.label} — {isId ? font.categoryId : font.categoryEn}
+                  </option>
+                ))}
+              </select>
+              <div
+                style={{ fontFamily: resolveFontCssFamily(selectedFont) }}
+                className="mt-2 px-3.5 py-2 rounded-xl bg-[#F8F9FA] border border-slate-200/80 flex items-center justify-between gap-2 text-xs"
+              >
+                <span className="font-bold text-[#2D3748] truncate">
+                  {storeName || 'SukaPOS'} · {storeTagline || 'Point of Sale'}
+                </span>
+                <span
+                  style={{ color: selectedColor }}
+                  className="font-extrabold shrink-0"
+                >
+                  Rp 25.000
+                </span>
               </div>
             </div>
           </div>
@@ -921,8 +1123,8 @@ export const GoogleCloudIntegrationPanel: React.FC<
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
                     <span className="w-2 h-2 rounded-full bg-amber-500" />
                     {isId
-                      ? 'Env Server Belum Diisi'
-                      : 'Server Env Not Configured'}
+                      ? 'Database Belum Terhubung'
+                      : 'Database Not Configured'}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -950,8 +1152,8 @@ export const GoogleCloudIntegrationPanel: React.FC<
               <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">
                 {!dbConfigured
                   ? isId
-                    ? 'Atur APPS_SCRIPT_URL & APPS_SCRIPT_TOKEN di Environment Variables Vercel serta API_TOKEN di Apps Script.'
-                    : 'Set APPS_SCRIPT_URL & APPS_SCRIPT_TOKEN in Vercel Environment Variables and API_TOKEN in Apps Script.'
+                    ? 'Isi URL Apps Script & API Token di form bawah (tersimpan di file eksternal) atau via Environment Variables.'
+                    : 'Enter your Apps Script URL & API Token below (saved to external config file) or via Environment Variables.'
                   : isId
                   ? `Semua permintaan diteruskan aman lewat proxy server /api/cloud (${products.length} produk aktif${lastSyncedAt ? ` · Update: ${lastSyncedAt}` : ''})`
                   : `All requests flow securely through /api/cloud proxy (${products.length} active products${lastSyncedAt ? ` · Last sync: ${lastSyncedAt}` : ''})`}
@@ -1034,26 +1236,26 @@ export const GoogleCloudIntegrationPanel: React.FC<
           </div>
         </div>
 
-        {/* 1. Panduan Keamanan Proxy Server (/api/cloud) & Script Properties */}
+        {/* Panduan Keamanan Proxy Server (/api/cloud) & File Pengaturan Eksternal */}
         <div className="rounded-2xl bg-[#F8F9FA] border border-slate-200/80 p-4 space-y-2.5 text-xs text-slate-600">
           <div className="font-extrabold text-[#2D3748] flex items-center gap-2">
             <Lock className="w-4 h-4 shrink-0" style={{ color: primaryColor }} />
             <span>
               {isId
-                ? '1. Konfigurasi Keamanan Proxy Server & Apps Script (Wajib)'
-                : '1. Server Proxy & Apps Script Security Setup (Required)'}
+                ? 'Panduan Database Multi-Pengguna & Keamanan Proxy (/api/cloud)'
+                : 'Multi-Buyer Database Setup & Proxy Security Guide (/api/cloud)'}
             </span>
           </div>
           <p className="leading-relaxed text-slate-500">
             {isId
-              ? 'Demi keamanan, URL Web App Apps Script dan token rahasia tidak pernah disimpan atau dikirim ke browser. Semua sinkronisasi melewati endpoint /api/cloud dengan validasi cookie sesi.'
-              : 'For security, the Apps Script Web App URL and secret token are never stored in or exposed to the browser. All sync requests pass through /api/cloud with session validation.'}
+              ? 'Setiap pengguna/pembeli aplikasi dapat menghubungkan database Google Sheets miliknya sendiri tanpa mengubah source code (src/). Token rahasia disimpan di file konfigurasi eksternal server atau Environment Variables dan tidak pernah dikirim balik ke browser.'
+              : 'Each buyer/tenant can connect their own Google Sheets database without editing source code (src/). Secret tokens stay in the server external config file or Environment Variables and are never sent back to the browser.'}
           </p>
           <ol className="list-decimal list-inside space-y-1.5 text-[11px] sm:text-xs text-slate-600 leading-relaxed">
             <li>
               {isId
-                ? 'Salin Code.gs di bawah ke Google Apps Script, lalu buka Project Settings → Script Properties dan tambahkan property '
-                : 'Copy Code.gs below into Google Apps Script, then open Project Settings → Script Properties and add property '}
+                ? 'Salin Code.gs di bawah ke Google Apps Script milik Anda, lalu buka Project Settings → Script Properties dan tambahkan property '
+                : 'Copy Code.gs below into your Google Apps Script, then open Project Settings → Script Properties and add property '}
               <code className="px-1.5 py-0.5 rounded bg-slate-200/70 font-mono text-[#2D3748] font-bold">
                 API_TOKEN
               </code>
@@ -1063,33 +1265,151 @@ export const GoogleCloudIntegrationPanel: React.FC<
             </li>
             <li>
               {isId
-                ? 'Deploy Apps Script sebagai Web App (Execute as: Me). File Google Spreadsheet tetap PRIVAT (tidak dibuka publik).'
-                : 'Deploy Apps Script as Web App (Execute as: Me). Keep the Google Spreadsheet PRIVATE (not public).'}
+                ? 'Deploy Apps Script sebagai Web App (Execute as: Me, Who has access: Anyone). File Google Spreadsheet tetap PRIVAT (tidak dibuka publik).'
+                : 'Deploy Apps Script as Web App (Execute as: Me, Who has access: Anyone). Keep the Google Spreadsheet PRIVATE (not public).'}
             </li>
             <li>
               {isId
-                ? 'Di Vercel → Project Settings → Environment Variables, isi '
-                : 'In Vercel → Project Settings → Environment Variables, set '}
+                ? 'Masukkan URL Web App (/exec) dan API Token pada form di bawah untuk menyimpannya otomatis ke file eksternal (atau edit manual file '
+                : 'Enter the Web App URL (/exec) and API Token below to save automatically to the external config file (or edit '}
               <code className="px-1.5 py-0.5 rounded bg-slate-200/70 font-mono text-[#2D3748] font-bold">
-                APPS_SCRIPT_URL
-              </code>{' '}
-              {isId ? 'dan ' : 'and '}
+                database.config.json
+              </code>
+              {isId ? ' / env ' : ' / env '}
               <code className="px-1.5 py-0.5 rounded bg-slate-200/70 font-mono text-[#2D3748] font-bold">
-                APPS_SCRIPT_TOKEN
-              </code>{' '}
-              {isId
-                ? '(sama persis dengan API_TOKEN), lalu Redeploy.'
-                : '(identical to API_TOKEN), then Redeploy.'}
+                DATABASE_CONFIG_PATH
+              </code>
+              {isId ? ' di luar folder aplikasi).' : ' outside the app folder).'}
             </li>
           </ol>
+
+          <div className="mt-2 pt-2.5 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <div className="text-slate-500 truncate max-w-full">
+              <span className="font-bold text-[#2D3748]">
+                {isId ? 'Lokasi File Konfigurasi:' : 'Config File Path:'}
+              </span>{' '}
+              <code className="font-mono text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
+                {cloudConfigMeta?.configFilePath || 'database.config.json'}
+              </code>
+            </div>
+            <span className="px-2 py-0.5 rounded-full font-bold bg-white border border-slate-200 text-slate-600">
+              {cloudConfigMeta?.source === 'external-file'
+                ? isId
+                  ? 'Sumber: File Eksternal'
+                  : 'Source: External File'
+                : cloudConfigMeta?.source === 'env'
+                ? isId
+                  ? 'Sumber: Environment Variable'
+                  : 'Source: Environment Variable'
+                : isId
+                ? 'Sumber: Belum Diatur'
+                : 'Source: Not Set'}
+            </span>
+          </div>
         </div>
 
-        {/* 2. Link URL Google Sheet Database (Pintasan Opsional) */}
+        {/* 1. URL Web App Google Apps Script (/exec) */}
         <div className="space-y-1.5">
           <label className="block text-xs font-bold text-[#2D3748]">
             {isId
-              ? '2. Pintasan Google Sheet Database (Opsional — Spreadsheet Tetap Privat)'
-              : '2. Google Sheet Database Shortcut (Optional — Sheet Stays Private)'}
+              ? '1. URL Web App Google Apps Script (/exec)'
+              : '1. Google Apps Script Web App URL (/exec)'}
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="url"
+              value={appsScriptUrl}
+              onChange={(e) => setAppsScriptUrl(e.target.value)}
+              placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+              className="flex-1 bg-[#F8F9FA] border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-mono text-[#2D3748] focus:outline-none focus:border-slate-400 min-w-0"
+            />
+            <button
+              type="button"
+              disabled={!appsScriptUrl}
+              onClick={() => copyText('appsScriptUrl', appsScriptUrl)}
+              className="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+            >
+              {copiedKey === 'appsScriptUrl' ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              {isId ? 'Salin' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        {/* 2. API Token Apps Script (API_TOKEN) */}
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="block text-xs font-bold text-[#2D3748]">
+              {isId
+                ? '2. API Token Apps Script (API_TOKEN di Script Properties)'
+                : '2. Apps Script API Token (API_TOKEN in Script Properties)'}
+            </label>
+            <button
+              type="button"
+              onClick={handleGenerateRandomToken}
+              className="text-[11px] font-bold hover:underline cursor-pointer"
+              style={{ color: primaryColor }}
+            >
+              {isId ? '+ Buat Token Acak Otomatis' : '+ Generate Random Token'}
+            </button>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="relative flex-1 min-w-0">
+              <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type={showAppsScriptToken ? 'text' : 'password'}
+                autoComplete="off"
+                value={appsScriptToken}
+                onChange={(e) => setAppsScriptToken(e.target.value)}
+                placeholder={
+                  cloudConfigMeta?.hasToken
+                    ? isId
+                      ? '•••••••••••••••• (Token sudah tersimpan — kosongkan jika tidak ingin mengubah)'
+                      : '•••••••••••••••• (Token already set — leave blank to keep current)'
+                    : isId
+                    ? 'Masukkan / klik Buat Token Acak, lalu samakan dengan API_TOKEN di Apps Script'
+                    : 'Enter / generate token and match it with API_TOKEN in Apps Script'
+                }
+                className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs font-mono text-[#2D3748] focus:outline-none focus:border-slate-400"
+              />
+              <button
+                type="button"
+                onClick={() => setShowAppsScriptToken((prev) => !prev)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                title={showAppsScriptToken ? 'Sembunyikan' : 'Tampilkan'}
+              >
+                {showAppsScriptToken ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+            <button
+              type="button"
+              disabled={!appsScriptToken}
+              onClick={() => copyText('appsScriptToken', appsScriptToken)}
+              className="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+            >
+              {copiedKey === 'appsScriptToken' ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              {isId ? 'Salin' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        {/* 3. Link URL Google Sheet Database (Pintasan Opsional) */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-bold text-[#2D3748]">
+            {isId
+              ? '3. Pintasan Google Sheet Database (Opsional — Spreadsheet Tetap Privat)'
+              : '3. Google Sheet Database Shortcut (Optional — Sheet Stays Private)'}
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
@@ -1128,12 +1448,12 @@ export const GoogleCloudIntegrationPanel: React.FC<
           </div>
         </div>
 
-        {/* 3. Link URL Google Drive Image Folder (Opsional) */}
+        {/* 4. Link URL Google Drive Image Folder (Opsional) */}
         <div className="space-y-1.5">
           <label className="block text-xs font-bold text-[#2D3748]">
             {isId
-              ? '3. Pintasan Folder Google Drive Foto Produk (Opsional, VIEW-only)'
-              : '3. Google Drive Product Images Folder Shortcut (Optional, VIEW-only)'}
+              ? '4. Pintasan Folder Google Drive Foto Produk (Opsional, VIEW-only)'
+              : '4. Google Drive Product Images Folder Shortcut (Optional, VIEW-only)'}
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
@@ -1203,7 +1523,11 @@ export const GoogleCloudIntegrationPanel: React.FC<
             ) : (
               <>
                 <Save className="w-4 h-4" />
-                <span>{isId ? 'Simpan Pintasan' : 'Save Shortcuts'}</span>
+                <span>
+                  {isId
+                    ? 'Simpan & Hubungkan Database'
+                    : 'Save & Connect Database'}
+                </span>
               </>
             )}
           </button>

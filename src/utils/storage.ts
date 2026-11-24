@@ -10,6 +10,7 @@ import {
 } from '../data/posData';
 import {
   DEFAULT_STORE_SETTINGS,
+  FONT_FAMILY_PRESETS,
   StoreBrandingSettings,
 } from '../data/i18nAndSettings';
 
@@ -95,6 +96,15 @@ export function sanitizeStoreSettings(raw: unknown): StoreBrandingSettings {
     ...DEFAULT_STORE_SETTINGS,
     ...(raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}),
   } as Record<string, unknown>;
+  if (merged.storeName === 'PinkPOS Resto') {
+    merged.storeName = 'SukaPOS';
+  }
+  if (
+    typeof merged.fontFamily !== 'string' ||
+    !FONT_FAMILY_PRESETS.some((f) => f.id === merged.fontFamily)
+  ) {
+    merged.fontFamily = DEFAULT_STORE_SETTINGS.fontFamily;
+  }
   delete merged.loginUsername;
   delete merged.loginPassword;
   return merged as unknown as StoreBrandingSettings;

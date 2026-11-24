@@ -3,6 +3,7 @@
 :root {
   --theme-primary: #FF2457;
   --theme-selection-bg: #FF245726;
+  --theme-font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 ::selection {
@@ -17,7 +18,7 @@
 
 @layer base {
   body {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: var(--theme-font);
     color: #2D3748;
     background-color: #F4F5F7;
   }

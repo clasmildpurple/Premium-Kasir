@@ -28,6 +28,7 @@ import {
   Language,
   StoreBrandingSettings,
   TRANSLATIONS,
+  resolveFontCssFamily,
 } from './data/i18nAndSettings';
 import {
   BrandLogo,
@@ -134,6 +135,7 @@ export default function App() {
   const t = TRANSLATIONS[storeSettings.language as Language];
   const isId = storeSettings.language === 'id';
   const primaryColor = storeSettings.primaryColor || '#FF2457';
+  const activeFontCss = resolveFontCssFamily(storeSettings.fontFamily);
 
   const [categories, setCategories] = useState<CategoryItem[]>(
     loadInitialCategories
@@ -161,6 +163,7 @@ export default function App() {
 
   const {
     googleConfig,
+    cloudConfigMeta,
     isCloudConfigured,
     isDbConfigured,
     twoWaySyncStatus,
@@ -170,6 +173,7 @@ export default function App() {
     latestStateRef,
     lastMutationAtRef,
     broadcastStateChange,
+    refreshCloudConfigMeta,
     pushToCloudDatabase,
     flushOfflineQueue,
     handleSyncTwoWay,
@@ -260,7 +264,8 @@ export default function App() {
     const root = document.documentElement;
     root.style.setProperty('--theme-primary', primaryColor);
     root.style.setProperty('--theme-selection-bg', `${primaryColor}26`);
-  }, [primaryColor]);
+    root.style.setProperty('--theme-font', activeFontCss);
+  }, [primaryColor, activeFontCss]);
 
   useEffect(() => {
     if (
@@ -479,6 +484,8 @@ export default function App() {
         {
           '--theme-primary': primaryColor,
           '--theme-selection-bg': `${primaryColor}26`,
+          '--theme-font': activeFontCss,
+          fontFamily: activeFontCss,
         } as React.CSSProperties
       }
       className="w-screen h-dvh overflow-hidden bg-[#E3E8EF] p-0 sm:p-2 lg:p-3.5 flex items-center justify-center"
@@ -862,6 +869,8 @@ export default function App() {
                     <div className="pb-20 md:pb-6">
                       <GoogleCloudIntegrationPanel
                         config={googleConfig}
+                        cloudConfigMeta={cloudConfigMeta}
+                        onRefreshCloudConfig={refreshCloudConfigMeta}
                         isCloudConfigured={isCloudConfigured}
                         offlineQueueCount={offlineQueueCount}
                         onFlushOfflineQueue={flushOfflineQueue}

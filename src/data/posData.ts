@@ -757,7 +757,7 @@ function doGet(e) {
       try { categories = JSON.parse(v); } catch (err) {}
     } else if (
       [
-        "storeName", "storeTagline", "primaryColor", "language",
+        "storeName", "storeTagline", "primaryColor", "fontFamily", "language",
         "logoType", "customLogoUrl", "taxEnabled", "taxName",
         "taxRate"
       ].indexOf(k) !== -1
@@ -1055,7 +1055,7 @@ function saveStoreBrandingRows(setSheet, settingsObj) {
   delete cleanSettings.loginPassword;
   upsertKeySetting(setSheet, "storeBranding", cleanSettings);
   const readableKeys = [
-    "storeName", "storeTagline", "primaryColor", "language",
+    "storeName", "storeTagline", "primaryColor", "fontFamily", "language",
     "logoType", "customLogoUrl", "taxEnabled", "taxName",
     "taxRate"
   ];

@@ -7,6 +7,7 @@ export interface StoreBrandingSettings {
   customLogoUrl: string;
   primaryColor: string;
   secondaryAccentColor: string;
+  fontFamily: string;
   language: Language;
   autoTwoWaySync: boolean;
   taxEnabled: boolean;
@@ -15,18 +16,80 @@ export interface StoreBrandingSettings {
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreBrandingSettings = {
-  storeName: 'PinkPOS Resto',
+  storeName: 'SukaPOS',
   storeTagline: 'Fast Food & Specialty Coffee',
   logoType: 'default_m',
   customLogoUrl: '',
   primaryColor: '#FF2457',
   secondaryAccentColor: '#FFCC33',
+  fontFamily: 'Plus Jakarta Sans',
   language: 'id',
   autoTwoWaySync: true,
   taxEnabled: true,
   taxName: 'PBF',
   taxRate: 5,
 };
+
+export interface FontFamilyPreset {
+  id: string;
+  label: string;
+  cssFamily: string;
+  categoryId: string;
+  categoryEn: string;
+}
+
+export const FONT_FAMILY_PRESETS: FontFamilyPreset[] = [
+  {
+    id: 'Plus Jakarta Sans',
+    label: 'Plus Jakarta Sans',
+    cssFamily: "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+    categoryId: 'Modern & Tegas (Default)',
+    categoryEn: 'Modern Geometric (Default)',
+  },
+  {
+    id: 'Inter',
+    label: 'Inter',
+    cssFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    categoryId: 'Bersih & Profesional',
+    categoryEn: 'Clean UI Sans',
+  },
+  {
+    id: 'Poppins',
+    label: 'Poppins',
+    cssFamily: "'Poppins', -apple-system, BlinkMacSystemFont, sans-serif",
+    categoryId: 'Ramah & Kasual',
+    categoryEn: 'Friendly Rounded',
+  },
+  {
+    id: 'DM Sans',
+    label: 'DM Sans',
+    cssFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+    categoryId: 'Minimalis Modern',
+    categoryEn: 'Crisp Minimalist',
+  },
+  {
+    id: 'Outfit',
+    label: 'Outfit',
+    cssFamily: "'Outfit', -apple-system, BlinkMacSystemFont, sans-serif",
+    categoryId: 'Kontemporer',
+    categoryEn: 'Contemporary Display',
+  },
+  {
+    id: 'Playfair Display',
+    label: 'Playfair Display',
+    cssFamily: "'Playfair Display', Georgia, serif",
+    categoryId: 'Klasik & Butik',
+    categoryEn: 'Artisan Serif',
+  },
+];
+
+export function resolveFontCssFamily(fontId?: string): string {
+  const matched = FONT_FAMILY_PRESETS.find((f) => f.id === fontId);
+  return (
+    matched?.cssFamily ||
+    "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  );
+}
 
 export const THEME_COLOR_PRESETS = [
   { name: 'Hot Pink (Video Default)', hex: '#FF2457' },
@@ -178,6 +241,7 @@ export const TRANSLATIONS = {
     logoOptionCustom: 'Custom Store Logo',
     uploadLogoBtn: 'Upload Store Logo Image',
     appThemeColorLabel: 'Application Primary Color',
+    appFontLabel: 'Application Typography / Font',
     saveBrandingBtn: 'Save Store Settings',
     taxSettingsTitle: 'Tax & Service Charge Settings',
     taxSettingsDesc:
@@ -340,6 +404,7 @@ export const TRANSLATIONS = {
     logoOptionCustom: 'Logo Kustom',
     uploadLogoBtn: 'Upload Gambar Logo Toko',
     appThemeColorLabel: 'Warna Utama Aplikasi',
+    appFontLabel: 'Jenis Huruf (Font) Aplikasi',
     saveBrandingBtn: 'Simpan Pengaturan Toko',
     taxSettingsTitle: 'Pengaturan Pajak & Biaya Layanan',
     taxSettingsDesc:
