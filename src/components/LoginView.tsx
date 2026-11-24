@@ -12,6 +12,7 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  LogIn,
   ShieldCheck,
   User,
 } from 'lucide-react';
@@ -40,6 +41,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [forceLoginMode, setForceLoginMode] = useState(false);
+
+  const isSetupMode = needsSetup && !forceLoginMode;
+
+  const handleToggleSetupOrLogin = (goToLogin: boolean) => {
+    setForceLoginMode(goToLogin);
+    setErrorMsg('');
+    setPassword('');
+    setConfirmPassword('');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +66,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    if (needsSetup) {
+    if (isSetupMode) {
       if (password.length < 8) {
         setErrorMsg(t.passwordMinLengthError);
         return;
@@ -70,7 +81,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsLoggingIn(true);
 
     try {
-      const endpoint = needsSetup ? '/api/setup-admin' : '/api/login';
+      const endpoint = isSetupMode ? '/api/setup-admin' : '/api/login';
       const res = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
@@ -79,7 +90,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           'X-Requested-With': 'XMLHttpRequest',
         },
         body: JSON.stringify(
-          needsSetup
+          isSetupMode
             ? { username: trimmedUser, password, confirmPassword }
             : { username: trimmedUser, password }
         ),
@@ -546,14 +557,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="lg:col-span-7 p-6 sm:p-10 lg:p-12 xl:p-14 flex flex-col justify-center max-w-lg mx-auto w-full">
         <div className="mb-5 sm:mb-7">
           <h2 className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-[#2D3748]">
-            {needsSetup
+            {isSetupMode
               ? isId
                 ? 'Setup Akun Admin'
                 : 'Initial Admin Setup'
               : t.loginWelcome}
           </h2>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            {needsSetup
+            {isSetupMode
               ? isId
                 ? 'Buat username dan password admin pertama kali (minimal 8 karakter).'
                 : 'Create your first-run admin username and password (min 8 chars).'
@@ -587,11 +598,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassword ? 'text' : 'password'}
-                autoComplete={needsSetup ? 'new-password' : 'current-password'}
+                autoComplete={isSetupMode ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder={
-                  needsSetup
+                  isSetupMode
                     ? isId
                       ? 'Minimal 8 karakter...'
                       : 'Minimum 8 characters...'
@@ -616,7 +627,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           </div>
 
-          {needsSetup && (
+          {isSetupMode && (
             <div>
               <label className="block text-xs font-bold text-[#2D3748] mb-2">
                 {t.confirmPasswordLabel}
@@ -658,7 +669,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <>
                 <KeyRound className="w-4 h-4" />
                 <span>
-                  {needsSetup
+                  {isSetupMode
                     ? isId
                       ? 'Simpan & Masuk ke POS'
                       : 'Create Admin & Sign In'
@@ -667,6 +678,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </>
             )}
           </button>
+
+          {needsSetup && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => handleToggleSetupOrLogin(!forceLoginMode)}
+                className="w-full py-2.5 sm:py-3 rounded-2xl border border-slate-200 bg-[#F8F9FA] hover:bg-slate-100 text-[#2D3748] font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <LogIn className="w-4 h-4" style={{ color: primaryColor }} />
+                <span>
+                  {isSetupMode
+                    ? isId
+                      ? 'Sudah Punya Akun Admin? Login'
+                      : 'Already Have an Admin Account? Login'
+                    : isId
+                    ? 'Belum Punya Akun Admin? Setup Akun'
+                    : 'Need First-Time Setup? Create Admin'}
+                </span>
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>
