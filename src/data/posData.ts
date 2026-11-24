@@ -1,5 +1,4 @@
 export interface PermanentGoogleConfig {
-  APPS_SCRIPT_URL: string;
   GOOGLE_SHEET_URL: string;
   GOOGLE_DRIVE_FOLDER_URL: string;
   SHEET_NAME_PRODUCTS: string;
@@ -8,18 +7,19 @@ export interface PermanentGoogleConfig {
 }
 
 /**
- * PERMANENTLY EMBEDDED GOOGLE CLOUD LINKS
+ * NON-SECRET CLOUD DISPLAY CONFIGURATION
+ * Apps Script URL (/exec) and API token live strictly on the server (Vercel env vars).
  */
 export const PERMANENT_GOOGLE_CONFIG: PermanentGoogleConfig = {
-  APPS_SCRIPT_URL:
-    'https://script.google.com/macros/s/AKfycbx9PinkPOS_Permanent_Cloud_Database_Exec_v1/exec',
-  GOOGLE_SHEET_URL:
-    'https://docs.google.com/spreadsheets/d/1PinkPOS_Master_Sheet_Database_Permanent_ID/edit#gid=0',
-  GOOGLE_DRIVE_FOLDER_URL:
-    'https://drive.google.com/drive/folders/1PinkPOS_Drive_Images_Folder_Permanent_ID',
+  GOOGLE_SHEET_URL: '',
+  GOOGLE_DRIVE_FOLDER_URL: '',
   SHEET_NAME_PRODUCTS: 'Products',
   SHEET_NAME_ORDERS: 'Orders',
 };
+
+export function isDatabaseConfigured(config: PermanentGoogleConfig): boolean {
+  return extractValidSpreadsheetId(config.GOOGLE_SHEET_URL) !== null;
+}
 
 export type CategoryId = string;
 
@@ -528,23 +528,28 @@ export function generateAppsScriptCode(config: PermanentGoogleConfig): string {
   return `/**
  * ============================================================================
  * PINKPOS — GOOGLE APPS SCRIPT BACKEND (Code.gs)
- * FITUR OTOMATIS:
- * - Otomatis membuat file Google Spreadsheet & tab Sheet (Products, Orders,
- *   Categories, StoreSettings) jika belum tersedia.
- * - Otomatis memperbarui data di Sheet setiap ada perubahan produk, stok,
- *   kategori, transaksi, maupun pengaturan toko dari aplikasi.
+ * KEAMANAN WAJIB:
+ * 1. Buka Project Settings -> Script Properties di Google Apps Script.
+ * 2. Tambahkan Property: API_TOKEN = <token_rahasia_panjang_anda>
+ * 3. Spreadsheet dibuat PRIVAT (hanya pemilik/Apps Script yang dapat mengakses).
+ *    Hanya folder foto produk di Drive yang bersifat VIEW-only agar foto tampil.
  * ============================================================================
  */
 
 const PERMANENT_CONFIG = {
-  APPS_SCRIPT_URL: "${config.APPS_SCRIPT_URL}",
-  GOOGLE_SHEET_URL: "${config.GOOGLE_SHEET_URL}",
-  GOOGLE_DRIVE_FOLDER_URL: "${config.GOOGLE_DRIVE_FOLDER_URL}",
+  GOOGLE_SHEET_URL: "${config.GOOGLE_SHEET_URL || ''}",
+  GOOGLE_DRIVE_FOLDER_URL: "${config.GOOGLE_DRIVE_FOLDER_URL || ''}",
   SHEET_PRODUCTS: "${config.SHEET_NAME_PRODUCTS}",
   SHEET_ORDERS: "${config.SHEET_NAME_ORDERS}",
   SHEET_SETTINGS: "StoreSettings",
   SHEET_CATEGORIES: "Categories"
 };
+
+function verifyToken(providedToken) {
+  const expectedToken = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
+  if (!expectedToken || !providedToken) return false;
+  return String(providedToken).trim() === String(expectedToken).trim();
+}
 
 function extractIdFromUrl(url) {
   if (!url) return "";
@@ -553,14 +558,14 @@ function extractIdFromUrl(url) {
 }
 
 /**
- * Otomatis membuka Spreadsheet dari link, atau membuat Spreadsheet baru secara otomatis
+ * Otomatis membuka Spreadsheet dari link, atau membuat Spreadsheet baru yang PRIVAT
  * jika belum ada, lalu menyimpan ID-nya di ScriptProperties.
  */
 function getOrCreateSpreadsheet() {
   const props = PropertiesService.getScriptProperties();
   const configuredId = extractIdFromUrl(PERMANENT_CONFIG.GOOGLE_SHEET_URL);
 
-  if (configuredId && configuredId.indexOf("Permanent_ID") === -1) {
+  if (configuredId) {
     try {
       return SpreadsheetApp.openById(configuredId);
     } catch (e) {}
@@ -581,15 +586,9 @@ function getOrCreateSpreadsheet() {
     }
   } catch (e) {}
 
-  // Otomatis buat Google Spreadsheet baru jika belum ada sama sekali
-  const created = SpreadsheetApp.create("PinkPOS — Database Otomatis");
+  // Otomatis buat Google Spreadsheet baru yang tetap PRIVAT (hanya pemilik)
+  const created = SpreadsheetApp.create("PinkPOS — Database Privat");
   props.setProperty("AUTO_CREATED_SHEET_ID", created.getId());
-  try {
-    DriveApp.getFileById(created.getId()).setSharing(
-      DriveApp.Access.ANYONE_WITH_LINK,
-      DriveApp.Permission.EDIT
-    );
-  } catch (e) {}
   return created;
 }
 
@@ -662,6 +661,11 @@ function ensureSheets(ss) {
 }
 
 function doGet(e) {
+  const token = e && e.parameter ? e.parameter.token : "";
+  if (!verifyToken(token)) {
+    return jsonResponse({ status: "error", error: "unauthorized" });
+  }
+
   const ss = getOrCreateSpreadsheet();
   const { prodSheet, ordSheet, catSheet, setSheet } = ensureSheets(ss);
 
@@ -742,14 +746,20 @@ function doGet(e) {
     const v = r[1];
     if (!k) return;
     if (k === "storeBranding") {
-      try { storeSettings = JSON.parse(v); } catch (err) {}
+      try {
+        storeSettings = JSON.parse(v);
+        if (storeSettings && typeof storeSettings === "object") {
+          delete storeSettings.loginUsername;
+          delete storeSettings.loginPassword;
+        }
+      } catch (err) {}
     } else if (k === "categoriesList" && !categories) {
       try { categories = JSON.parse(v); } catch (err) {}
     } else if (
       [
         "storeName", "storeTagline", "primaryColor", "language",
         "logoType", "customLogoUrl", "taxEnabled", "taxName",
-        "taxRate", "loginUsername", "loginPassword"
+        "taxRate"
       ].indexOf(k) !== -1
     ) {
       if (k === "taxEnabled") {
@@ -792,14 +802,45 @@ function writeProductsTable(prodSheet, productsList) {
   prodSheet.getRange(1, 1, prodRows.length, prodRows[0].length).setValues(prodRows);
 }
 
+function adjustStockForOrderItems(prodSheet, items, multiplier) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const qtyById = {};
+  items.forEach(it => {
+    const idKey = String(it && it.id ? it.id : "").trim();
+    const qty = Number(it && it.quantity ? it.quantity : 0);
+    if (idKey && qty > 0) {
+      qtyById[idKey] = (qtyById[idKey] || 0) + qty;
+    }
+  });
+
+  const prodData = prodSheet.getDataRange().getValues();
+  for (let i = 1; i < prodData.length; i++) {
+    const rowId = String(prodData[i][0] || "").trim();
+    if (qtyById[rowId]) {
+      const currentStock = Number(prodData[i][9] ?? 20);
+      const nextStock = Math.max(0, currentStock + multiplier * qtyById[rowId]);
+      prodSheet.getRange(i + 1, 10).setValue(nextStock);
+    }
+  }
+}
+
 function doPost(e) {
+  const lock = LockService.getScriptLock();
+  let lockAcquired = false;
   try {
-    const payload = JSON.parse(e.postData.contents);
+    const payload = JSON.parse(e && e.postData ? e.postData.contents : "{}");
+    if (!verifyToken(payload && payload.token)) {
+      return jsonResponse({ status: "error", error: "unauthorized" });
+    }
+
+    lock.waitLock(15000);
+    lockAcquired = true;
+
     const action = payload.action;
     const ss = getOrCreateSpreadsheet();
     const { prodSheet, ordSheet, catSheet, setSheet } = ensureSheets(ss);
 
-    // Bulk Auto-Initialize & Sync All Data to Sheets
+    // Bulk Sync All Data to Sheets (hanya untuk sinkronisasi awal / manual)
     if (action === "syncAll") {
       if (Array.isArray(payload.products)) {
         writeProductsTable(prodSheet, payload.products);
@@ -852,45 +893,36 @@ function doPost(e) {
         imageUrl = "https://lh3.googleusercontent.com/d/" + driveFileId + "=w600";
       }
 
-      if (Array.isArray(payload.allProducts)) {
-        const syncedList = payload.allProducts.map(p =>
-          String(p.id) === String(payload.id)
-            ? Object.assign({}, p, { imageUrl, driveFileId })
-            : p
-        );
-        writeProductsTable(prodSheet, syncedList);
+      const data = prodSheet.getDataRange().getValues();
+      let updatedRowIndex = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (
+          String(data[i][0]).trim() === String(payload.id).trim() ||
+          (payload.barcode && String(data[i][2]).trim() === String(payload.barcode).trim())
+        ) {
+          updatedRowIndex = i + 1;
+          break;
+        }
+      }
+
+      const rowValues = [
+        payload.id,
+        payload.name,
+        payload.barcode || "",
+        payload.price,
+        (payload.categories || ["hot"]).join(","),
+        Boolean(payload.isNew),
+        payload.popularity || 90,
+        imageUrl,
+        driveFileId,
+        payload.stock !== undefined ? Number(payload.stock) : 20,
+        payload.lowStockThreshold !== undefined ? Number(payload.lowStockThreshold) : 5
+      ];
+
+      if (updatedRowIndex > 0) {
+        prodSheet.getRange(updatedRowIndex, 1, 1, rowValues.length).setValues([rowValues]);
       } else {
-        const data = prodSheet.getDataRange().getValues();
-        let updatedRowIndex = -1;
-        for (let i = 1; i < data.length; i++) {
-          if (
-            String(data[i][0]).trim() === String(payload.id).trim() ||
-            (payload.barcode && String(data[i][2]).trim() === String(payload.barcode).trim())
-          ) {
-            updatedRowIndex = i + 1;
-            break;
-          }
-        }
-
-        const rowValues = [
-          payload.id,
-          payload.name,
-          payload.barcode || "",
-          payload.price,
-          (payload.categories || ["hot"]).join(","),
-          Boolean(payload.isNew),
-          payload.popularity || 90,
-          imageUrl,
-          driveFileId,
-          payload.stock !== undefined ? Number(payload.stock) : 20,
-          payload.lowStockThreshold !== undefined ? Number(payload.lowStockThreshold) : 5
-        ];
-
-        if (updatedRowIndex > 0) {
-          prodSheet.getRange(updatedRowIndex, 1, 1, rowValues.length).setValues([rowValues]);
-        } else {
-          prodSheet.appendRow(rowValues);
-        }
+        prodSheet.appendRow(rowValues);
       }
 
       SpreadsheetApp.flush();
@@ -898,64 +930,75 @@ function doPost(e) {
     }
 
     if (action === "deleteProduct") {
-      if (Array.isArray(payload.allProducts)) {
-        writeProductsTable(prodSheet, payload.allProducts);
-      } else {
-        const data = prodSheet.getDataRange().getValues();
-        for (let i = data.length - 1; i >= 1; i--) {
-          if (
-            String(data[i][0]).trim() === String(payload.id).trim() ||
-            (payload.name && String(data[i][1]).trim() === String(payload.name).trim())
-          ) {
-            prodSheet.deleteRow(i + 1);
-          }
+      const data = prodSheet.getDataRange().getValues();
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (
+          String(data[i][0]).trim() === String(payload.id).trim() ||
+          (payload.name && String(data[i][1]).trim() === String(payload.name).trim())
+        ) {
+          prodSheet.deleteRow(i + 1);
         }
       }
       SpreadsheetApp.flush();
       return jsonResponse({ status: "ok", deletedId: payload.id, sheetUrl: ss.getUrl() });
     }
 
-    if (action === "saveOrder") {
+    if (action === "addOrder" || action === "saveOrder") {
+      const orderIdStr = String(payload.orderId || "").trim();
+      const existingOrders = ordSheet.getDataRange().getValues();
+      for (let i = 1; i < existingOrders.length; i++) {
+        if (String(existingOrders[i][0]).trim() === orderIdStr) {
+          return jsonResponse({
+            status: "ok",
+            orderId: orderIdStr,
+            duplicateIgnored: true,
+            sheetUrl: ss.getUrl()
+          });
+        }
+      }
+
       ordSheet.appendRow([
-        payload.orderId,
+        orderIdStr,
         payload.createdAt,
-        JSON.stringify(payload.items),
-        payload.subTotal,
-        payload.taxPbf,
-        payload.total,
+        JSON.stringify(payload.items || []),
+        Number(payload.subTotal || 0),
+        Number(payload.taxPbf || 0),
+        Number(payload.total || 0),
         payload.customerName || "",
         payload.paymentMethod || "",
         payload.cashierName || ""
       ]);
 
-      if (Array.isArray(payload.allProducts)) {
-        writeProductsTable(prodSheet, payload.allProducts);
-      } else if (Array.isArray(payload.items) && payload.items.length > 0) {
-        const prodData = prodSheet.getDataRange().getValues();
-        for (let i = 1; i < prodData.length; i++) {
-          const rowId = String(prodData[i][0]).trim();
-          const ordered = payload.items.find(it => String(it.id).trim() === rowId);
-          if (ordered) {
-            const currentStock = Number(prodData[i][9] ?? 20);
-            const nextStock = Math.max(0, currentStock - Number(ordered.quantity || 0));
-            prodSheet.getRange(i + 1, 10).setValue(nextStock);
-          }
-        }
-      }
+      adjustStockForOrderItems(prodSheet, payload.items || [], -1);
 
       SpreadsheetApp.flush();
-      return jsonResponse({ status: "ok", orderId: payload.orderId, sheetUrl: ss.getUrl() });
+      return jsonResponse({ status: "ok", orderId: orderIdStr, sheetUrl: ss.getUrl() });
     }
 
     if (action === "deleteOrder") {
+      const targetId = String(payload.orderId || "").trim();
       const data = ordSheet.getDataRange().getValues();
+      let itemsToRestore = [];
+
       for (let i = data.length - 1; i >= 1; i--) {
-        if (String(data[i][0]).trim() === String(payload.orderId).trim()) {
+        if (String(data[i][0]).trim() === targetId) {
+          try {
+            const parsed = JSON.parse(data[i][2] || "[]");
+            if (Array.isArray(parsed)) {
+              itemsToRestore = itemsToRestore.concat(parsed);
+            }
+          } catch (err) {}
           ordSheet.deleteRow(i + 1);
         }
       }
+
+      if (itemsToRestore.length === 0 && Array.isArray(payload.items)) {
+        itemsToRestore = payload.items;
+      }
+      adjustStockForOrderItems(prodSheet, itemsToRestore, 1);
+
       SpreadsheetApp.flush();
-      return jsonResponse({ status: "ok", deletedOrderId: payload.orderId, sheetUrl: ss.getUrl() });
+      return jsonResponse({ status: "ok", deletedOrderId: targetId, sheetUrl: ss.getUrl() });
     }
 
     if (action === "saveStoreSettings") {
@@ -999,19 +1042,26 @@ function doPost(e) {
     return jsonResponse({ status: "error", message: "Unknown action: " + action });
   } catch (err) {
     return jsonResponse({ status: "error", message: err.toString() });
+  } finally {
+    if (lockAcquired) {
+      try { lock.releaseLock(); } catch (e) {}
+    }
   }
 }
 
 function saveStoreBrandingRows(setSheet, settingsObj) {
-  upsertKeySetting(setSheet, "storeBranding", settingsObj);
+  const cleanSettings = Object.assign({}, settingsObj || {});
+  delete cleanSettings.loginUsername;
+  delete cleanSettings.loginPassword;
+  upsertKeySetting(setSheet, "storeBranding", cleanSettings);
   const readableKeys = [
     "storeName", "storeTagline", "primaryColor", "language",
     "logoType", "customLogoUrl", "taxEnabled", "taxName",
-    "taxRate", "loginUsername", "loginPassword"
+    "taxRate"
   ];
   readableKeys.forEach(k => {
-    if (settingsObj[k] !== undefined) {
-      upsertRawSetting(setSheet, k, settingsObj[k]);
+    if (cleanSettings[k] !== undefined) {
+      upsertRawSetting(setSheet, k, cleanSettings[k]);
     }
   });
 }
@@ -1046,241 +1096,13 @@ function jsonResponse(obj) {
 }
 
 /**
- * Extracts a real Google Spreadsheet ID from a Google Sheet URL (ignores placeholder IDs).
+ * Extracts a real Google Spreadsheet ID from a Google Sheet URL.
  */
 export function extractValidSpreadsheetId(sheetUrl: string): string | null {
   if (!sheetUrl) return null;
   const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]{15,})/);
   if (!match || !match[1]) return null;
-  if (match[1].includes('Permanent_ID')) return null;
   return match[1];
 }
 
-/**
- * Reads a sheet tab directly from Google Sheets via the GViz JSON endpoint
- * as a secondary 2-way read channel if the spreadsheet is shared with link access.
- */
-async function fetchGvizTabRows(
-  spreadsheetId: string,
-  sheetName: string
-): Promise<string[][] | null> {
-  try {
-    const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&t=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const csvText = await res.text();
-    if (!csvText || csvText.trim().startsWith('<!DOCTYPE')) return null;
-
-    // Parse CSV lines handling quoted fields
-    const rows: string[][] = [];
-    let currentRow: string[] = [];
-    let currentCell = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < csvText.length; i++) {
-      const ch = csvText[i];
-      const next = csvText[i + 1];
-      if (inQuotes) {
-        if (ch === '"' && next === '"') {
-          currentCell += '"';
-          i++;
-        } else if (ch === '"') {
-          inQuotes = false;
-        } else {
-          currentCell += ch;
-        }
-      } else {
-        if (ch === '"') {
-          inQuotes = true;
-        } else if (ch === ',') {
-          currentRow.push(currentCell);
-          currentCell = '';
-        } else if (ch === '\n' || (ch === '\r' && next === '\n')) {
-          if (ch === '\r') i++;
-          currentRow.push(currentCell);
-          rows.push(currentRow);
-          currentRow = [];
-          currentCell = '';
-        } else {
-          currentCell += ch;
-        }
-      }
-    }
-    if (currentCell.length > 0 || currentRow.length > 0) {
-      currentRow.push(currentCell);
-      rows.push(currentRow);
-    }
-    return rows;
-  } catch {
-    return null;
-  }
-}
-
-export async function pullFromGoogleSheetDirect(spreadsheetId: string): Promise<{
-  products?: ProductItem[];
-  categories?: CategoryItem[];
-  orders?: OrderRecord[];
-  storeSettings?: Record<string, unknown>;
-} | null> {
-  try {
-    let [prodRows, catRows, ordRows, setRows] = await Promise.all([
-      fetchGvizTabRows(spreadsheetId, 'Products'),
-      fetchGvizTabRows(spreadsheetId, 'Categories'),
-      fetchGvizTabRows(spreadsheetId, 'Orders'),
-      fetchGvizTabRows(spreadsheetId, 'StoreSettings'),
-    ]);
-
-    // Fallback if user named the sheet "Produk" in Indonesian
-    if (!prodRows) {
-      prodRows = await fetchGvizTabRows(spreadsheetId, 'Produk');
-    }
-
-    if (!prodRows && !catRows && !ordRows && !setRows) return null;
-
-    let products: ProductItem[] | undefined;
-    if (prodRows && prodRows.length >= 1) {
-      const headers = prodRows[0].map((h) => h.trim().toLowerCase());
-      products = prodRows
-        .slice(1)
-        .filter((r) => (r[0] && r[0].trim()) || (r[1] && r[1].trim()))
-        .map((row, idx) => {
-          const obj: Record<string, string> = {};
-          headers.forEach((h, i) => {
-            obj[h] = (row[i] ?? '').trim();
-          });
-          const idVal = obj.id || obj.kode || `prod-${idx + 1}`;
-          const nameVal =
-            obj.name ||
-            obj.nama ||
-            obj['nama produk'] ||
-            obj.menu ||
-            obj.produk ||
-            `Produk ${idx + 1}`;
-          const barcodeVal =
-            obj.barcode ||
-            obj.sku ||
-            `89910021${String(idx + 1).padStart(4, '0')}`;
-          const priceVal = obj.price || obj.harga || obj['harga jual'] || '0';
-          const catVal =
-            obj.categories || obj.category || obj.kategori || 'hot';
-          const stockVal = obj.stock ?? obj.stok ?? obj.jumlah ?? '';
-          const thresholdVal =
-            obj.lowstockthreshold ??
-            obj['batas stok'] ??
-            obj['min stok'] ??
-            '';
-          const imgVal =
-            obj.imageurl || obj.image || obj.foto || obj.gambar || obj.url || '';
-          const driveVal = obj.drivefileid || '';
-          const isNewVal = obj.isnew || '';
-          const popVal = obj.popularity || obj.popularitas || '90';
-
-          return {
-            id: String(idVal),
-            name: String(nameVal),
-            barcode: String(barcodeVal),
-            price: normalizePriceToIdr(priceVal),
-            categories: String(catVal)
-              .split(',')
-              .map((s) => s.trim())
-              .filter(Boolean),
-            isNew:
-              String(isNewVal).toLowerCase() === 'true' || isNewVal === '1',
-            popularity: Number(popVal || 90),
-            imageUrl: String(imgVal),
-            driveFileId: driveVal || undefined,
-            stock: stockVal !== '' ? Number(stockVal) : 20,
-            lowStockThreshold: thresholdVal !== '' ? Number(thresholdVal) : 5,
-          };
-        });
-    }
-
-    let categories: CategoryItem[] | undefined;
-    if (catRows && catRows.length >= 1) {
-      const validCats = catRows
-        .slice(1)
-        .filter((r) => r[0] && r[1])
-        .map((r) => ({
-          id: r[0].trim(),
-          name: r[1].trim(),
-          nameEn: (r[2] || r[1]).trim(),
-        }));
-      if (validCats.length > 0) categories = validCats;
-    }
-
-    let orders: OrderRecord[] | undefined;
-    if (ordRows && ordRows.length >= 1) {
-      orders = ordRows
-        .slice(1)
-        .filter((r) => r[0] && r[0].trim())
-        .reverse()
-        .map((r) => {
-          let items = [];
-          try {
-            items = JSON.parse(r[2] || '[]');
-          } catch {
-            items = [];
-          }
-          return {
-            orderId: r[0].trim(),
-            createdAt: r[1] || '',
-            items,
-            subTotal: normalizePriceToIdr(r[3] || 0),
-            taxPbf: normalizePriceToIdr(r[4] || 0),
-            total: normalizePriceToIdr(r[5] || 0),
-            customerName: r[6] ? r[6].trim() : undefined,
-            paymentMethod: r[7] ? r[7].trim() : undefined,
-            cashierName: r[8] ? r[8].trim() : undefined,
-            syncedToSheet: true,
-          };
-        });
-    }
-
-    let storeSettings: Record<string, unknown> | undefined;
-    if (setRows && setRows.length > 1) {
-      let baseSettings: Record<string, unknown> = {};
-      const overrides: Record<string, unknown> = {};
-      setRows.slice(1).forEach((r) => {
-        const k = (r[0] || '').trim();
-        const v = r[1] ?? '';
-        if (!k) return;
-        if (k === 'storeBranding') {
-          try {
-            baseSettings = JSON.parse(v);
-          } catch {
-            // ignore
-          }
-        } else if (k === 'taxEnabled') {
-          overrides[k] = v.toLowerCase() === 'true';
-        } else if (k === 'taxRate') {
-          overrides[k] = Number(v || 0);
-        } else if (
-          [
-            'storeName',
-            'storeTagline',
-            'primaryColor',
-            'language',
-            'logoType',
-            'customLogoUrl',
-            'taxName',
-            'loginUsername',
-            'loginPassword',
-          ].includes(k)
-        ) {
-          overrides[k] = v;
-        }
-      });
-      if (
-        Object.keys(baseSettings).length > 0 ||
-        Object.keys(overrides).length > 0
-      ) {
-        storeSettings = { ...baseSettings, ...overrides };
-      }
-    }
-
-    return { products, categories, orders, storeSettings };
-  } catch {
-    return null;
-  }
-}
 

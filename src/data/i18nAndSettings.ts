@@ -12,8 +12,6 @@ export interface StoreBrandingSettings {
   taxEnabled: boolean;
   taxName: string;
   taxRate: number;
-  loginUsername?: string;
-  loginPassword?: string;
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreBrandingSettings = {
@@ -28,8 +26,6 @@ export const DEFAULT_STORE_SETTINGS: StoreBrandingSettings = {
   taxEnabled: true,
   taxName: 'PBF',
   taxRate: 5,
-  loginUsername: 'kasir@pinkpos.id',
-  loginPassword: '123456',
 };
 
 export const THEME_COLOR_PRESETS = [
@@ -191,18 +187,19 @@ export const TRANSLATIONS = {
     taxRateLabel: 'Tax Percentage Rate (%)',
     saveTaxBtn: 'Save Tax Settings',
 
-    // Login User & Password Settings
-    loginAccountSettingsTitle: 'Login Account Settings (User & Password)',
+    // Change Password Settings
+    loginAccountSettingsTitle: 'Change Login Password',
     loginAccountSettingsDesc:
-      'Change the username/user and password/PIN used to sign in to the POS application',
-    newUsernameLabel: 'Login Username / User',
-    newPasswordLabel: 'New Login Password / PIN',
-    confirmPasswordLabel: 'Confirm New Password / PIN',
-    saveLoginAccountBtn: 'Save User & Password',
-    loginAccountSavedMsg: 'Login user & password updated successfully!',
+      'Update your admin/cashier password securely (minimum 8 characters)',
+    oldPasswordLabel: 'Current Password',
+    newPasswordLabel: 'New Password (min 8 chars)',
+    confirmPasswordLabel: 'Confirm New Password',
+    saveLoginAccountBtn: 'Update Password',
+    loginAccountSavedMsg: 'Password updated successfully!',
     passwordMismatchError: 'Password confirmation does not match!',
+    passwordMinLengthError: 'New password must be at least 8 characters.',
     invalidCredentialsError:
-      'Invalid username or password/PIN! Please check your login credentials.',
+      'Invalid username or password. Please check your credentials.',
   },
   id: {
     // Sidebar
@@ -352,17 +349,18 @@ export const TRANSLATIONS = {
     taxRateLabel: 'Persentase Pajak (%)',
     saveTaxBtn: 'Simpan Pengaturan Pajak',
 
-    // Pengaturan Akun Login (User & Password)
-    loginAccountSettingsTitle: 'Pengaturan Akun Login (User & Password)',
+    // Pengaturan Ganti Password
+    loginAccountSettingsTitle: 'Ganti Password Login',
     loginAccountSettingsDesc:
-      'Ubah username/user dan password/PIN untuk masuk (login) ke aplikasi POS',
-    newUsernameLabel: 'User / Username Login',
-    newPasswordLabel: 'Password / PIN Login Baru',
-    confirmPasswordLabel: 'Konfirmasi Password / PIN Baru',
-    saveLoginAccountBtn: 'Simpan User & Password',
-    loginAccountSavedMsg: 'User dan password login berhasil diperbarui!',
+      'Perbarui password akun kasir/admin secara aman (minimal 8 karakter)',
+    oldPasswordLabel: 'Password Lama',
+    newPasswordLabel: 'Password Baru (min. 8 karakter)',
+    confirmPasswordLabel: 'Konfirmasi Password Baru',
+    saveLoginAccountBtn: 'Perbarui Password',
+    loginAccountSavedMsg: 'Password login berhasil diperbarui!',
     passwordMismatchError: 'Konfirmasi password tidak sesuai!',
+    passwordMinLengthError: 'Password baru minimal 8 karakter.',
     invalidCredentialsError:
-      'User atau password/PIN salah! Silakan periksa kembali.',
+      'Username atau password salah. Silakan periksa kembali.',
   },
 };

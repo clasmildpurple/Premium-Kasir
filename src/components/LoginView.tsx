@@ -18,23 +18,25 @@ import {
 
 interface LoginViewProps {
   storeSettings: StoreBrandingSettings;
+  needsSetup?: boolean;
   onToggleLanguage: () => void;
   onLoginSuccess: (cashierName: string) => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
   storeSettings,
+  needsSetup = false,
   onToggleLanguage,
   onLoginSuccess,
 }) => {
   const t = TRANSLATIONS[storeSettings.language as Language];
+  const isId = storeSettings.language === 'id';
   const primaryColor = storeSettings.primaryColor || '#FF2457';
 
-  const expectedUsername = storeSettings.loginUsername || 'kasir@pinkpos.id';
-  const expectedPassword = storeSettings.loginPassword || '123456';
-
-  const [username, setUsername] = useState(expectedUsername);
-  const [password, setPassword] = useState(expectedPassword);
+  // Always start completely empty — never autofill credentials
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -42,31 +44,74 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoggingIn) return;
-    if (!username.trim() || !password.trim()) {
+
+    const trimmedUser = username.trim();
+    if (!trimmedUser || !password) {
       setErrorMsg(
-        storeSettings.language === 'id'
-          ? 'Mohon isi username dan password/PIN'
-          : 'Please enter username and password/PIN'
+        isId
+          ? 'Mohon isi username dan password.'
+          : 'Please enter username and password.'
       );
       return;
     }
 
-    if (
-      username.trim().toLowerCase() !== expectedUsername.trim().toLowerCase() ||
-      password.trim() !== expectedPassword.trim()
-    ) {
-      setErrorMsg(t.invalidCredentialsError);
-      return;
+    if (needsSetup) {
+      if (password.length < 8) {
+        setErrorMsg(t.passwordMinLengthError);
+        return;
+      }
+      if (password !== confirmPassword) {
+        setErrorMsg(t.passwordMismatchError);
+        return;
+      }
     }
 
     setErrorMsg('');
     setIsLoggingIn(true);
-    await new Promise((r) => setTimeout(r, 400));
-    const displayUser = username.includes('@')
-      ? username.split('@')[0]
-      : username.trim();
-    setIsLoggingIn(false);
-    onLoginSuccess(displayUser);
+
+    try {
+      const endpoint = needsSetup ? '/api/setup-admin' : '/api/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify(
+          needsSetup
+            ? { username: trimmedUser, password, confirmPassword }
+            : { username: trimmedUser, password }
+        ),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        authenticated?: boolean;
+        username?: string;
+        error?: string;
+      };
+
+      if (!res.ok || !data.authenticated) {
+        setErrorMsg(data.error || t.invalidCredentialsError);
+        return;
+      }
+
+      const authedUser = data.username || trimmedUser;
+      const displayUser = authedUser.includes('@')
+        ? authedUser.split('@')[0]
+        : authedUser;
+      setPassword('');
+      setConfirmPassword('');
+      onLoginSuccess(displayUser);
+    } catch {
+      setErrorMsg(
+        isId
+          ? 'Gagal terhubung ke server autentikasi. Coba lagi.'
+          : 'Failed to reach authentication server. Please try again.'
+      );
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   return (
@@ -85,19 +130,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
         </button>
       </div>
 
-      {/* Left Brand Showcase Column (5 cols) with Transparent POS & Culinary Vector Background */}
+      {/* Left Brand Showcase Column (5 cols) */}
       <div
         style={{ backgroundColor: `${primaryColor}0D` }}
         className="lg:col-span-5 p-6 sm:p-8 lg:p-11 xl:p-13 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-slate-100 relative overflow-hidden isolate"
       >
-        {/* ==================================================================
-            TRANSPARENT VECTOR BACKGROUND ILLUSTRATION (Adapts to Theme Color)
-           ================================================================== */}
         <div
           aria-hidden="true"
           className="pointer-events-none select-none absolute inset-0 -z-10 overflow-hidden"
         >
-          {/* Soft Ambient Glows */}
           <div
             style={{
               background: `radial-gradient(circle at center, ${primaryColor}22 0%, transparent 70%)`,
@@ -111,7 +152,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
             className="absolute -bottom-28 -left-20 w-96 h-96 rounded-full blur-2xl"
           />
 
-          {/* Full-Panel Transparent Vector Art: POS Terminal, Analytics Curve, Receipt & Culinary Watermarks */}
           <svg
             viewBox="0 0 520 760"
             fill="none"
@@ -156,10 +196,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </linearGradient>
             </defs>
 
-            {/* Subtle Dot Matrix Grid */}
             <rect width="520" height="760" fill="url(#posLoginDotGrid)" />
 
-            {/* Decorative Concentric Geometric Rings (Top Right) */}
             <circle
               cx="450"
               cy="120"
@@ -185,7 +223,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               fillOpacity="0.05"
             />
 
-            {/* Floating Analytics & Sales Chart Card (Upper-Middle Right) */}
             <g transform="translate(215, 130) rotate(-4)">
               <rect
                 x="0"
@@ -198,7 +235,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 strokeOpacity="0.16"
                 strokeWidth="1.5"
               />
-              {/* Header bars inside card */}
               <rect
                 x="22"
                 y="22"
@@ -224,7 +260,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 fill={primaryColor}
                 fillOpacity="0.10"
               />
-              {/* Smooth Rising Sales Trend Curve */}
               <path
                 d="M22 132 C 62 126, 78 96, 114 102 C 148 106, 168 68, 202 72 C 224 75, 236 48, 248 44 L 248 144 L 22 144 Z"
                 fill="url(#posChartGrad)"
@@ -265,9 +300,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               />
             </g>
 
-            {/* Transparent POS Register & Thermal Receipt Vector (Lower Right) */}
             <g transform="translate(230, 445) rotate(3)">
-              {/* POS Screen Frame */}
               <rect
                 x="20"
                 y="30"
@@ -279,7 +312,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 strokeOpacity="0.16"
                 strokeWidth="1.75"
               />
-              {/* Product Grid Tiles inside POS Screen */}
               <rect
                 x="38"
                 y="50"
@@ -316,7 +348,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 fill={primaryColor}
                 fillOpacity="0.14"
               />
-              {/* Cart Sidebar inside POS Screen */}
               <rect
                 x="184"
                 y="50"
@@ -338,7 +369,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 fill={primaryColor}
                 fillOpacity="0.22"
               />
-              {/* POS Stand Base */}
               <path
                 d="M115 205 L175 205 L192 238 L98 238 Z"
                 fill={primaryColor}
@@ -355,7 +385,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               />
             </g>
 
-            {/* Floating Thermal Receipt & Barcode Vector (Bottom Left-Center) */}
             <g transform="translate(36, 520) rotate(-6)">
               <path
                 d="M0 14 C0 6.268 6.268 0 14 0 H126 C133.732 0 140 6.268 140 14 V168 L128 160 L116 168 L104 160 L92 168 L80 160 L68 168 L56 160 L44 168 L32 160 L20 168 L10 160 L0 168 Z"
@@ -404,7 +433,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 strokeWidth="4"
                 strokeLinecap="round"
               />
-              {/* Barcode stripes inside receipt */}
               <g opacity="0.20" fill={primaryColor}>
                 <rect x="24" y="114" width="3" height="24" rx="1" />
                 <rect x="31" y="114" width="6" height="24" rx="1" />
@@ -421,7 +449,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </g>
             </g>
 
-            {/* Subtle Culinary Line-Art Watermark (Burger & Specialty Coffee Cup) */}
             <g
               transform="translate(42, 185) rotate(-8)"
               stroke={primaryColor}
@@ -430,7 +457,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              {/* Coffee Cup */}
               <path d="M18 36 H66 V62 C66 75.255 55.255 86 42 86 C28.745 86 18 75.255 18 62 V36 Z" />
               <path d="M66 44 H74 C79.523 44 84 48.477 84 54 C84 59.523 79.523 64 74 64 H66" />
               <line x1="12" y1="94" x2="72" y2="94" />
@@ -438,7 +464,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <path d="M48 24 C48 18, 54 18, 54 12" />
             </g>
 
-            {/* Flowing Abstract Wave Lines Across Bottom */}
             <path
               d="M -40 690 C 90 640, 220 730, 360 675 C 440 645, 500 660, 560 630"
               stroke={primaryColor}
@@ -485,7 +510,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             {storeSettings.storeName}
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 leading-relaxed max-w-md">
-            {storeSettings.language === 'id'
+            {isId
               ? 'Sistem manajemen kasir restoran, pemantauan stok real-time, dan analitik penjualan terpadu.'
               : 'Integrated restaurant point of sale, real-time inventory monitoring, and sales analytics.'}
           </p>
@@ -501,14 +526,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="lg:col-span-7 p-6 sm:p-10 lg:p-12 xl:p-14 flex flex-col justify-center max-w-lg mx-auto w-full">
         <div className="mb-5 sm:mb-7">
           <h2 className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-[#2D3748]">
-            {t.loginWelcome}
+            {needsSetup
+              ? isId
+                ? 'Setup Akun Admin'
+                : 'Initial Admin Setup'
+              : t.loginWelcome}
           </h2>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            {t.loginSubtitle}
+            {needsSetup
+              ? isId
+                ? 'Buat username dan password admin pertama kali (minimal 8 karakter).'
+                : 'Create your first-run admin username and password (min 8 chars).'
+              : t.loginSubtitle}
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-4.5">
+        <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-4.5" autoComplete="off">
           <div>
             <label className="block text-xs font-bold text-[#2D3748] mb-2">
               {t.usernameLabel}
@@ -517,9 +550,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <User className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
+                autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder={expectedUsername}
+                placeholder={isId ? 'Masukkan username...' : 'Enter username...'}
                 className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
               />
             </div>
@@ -533,9 +567,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassword ? 'text' : 'password'}
+                autoComplete={needsSetup ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••"
+                placeholder={
+                  needsSetup
+                    ? isId
+                      ? 'Minimal 8 karakter...'
+                      : 'Minimum 8 characters...'
+                    : isId
+                    ? 'Masukkan password...'
+                    : 'Enter password...'
+                }
                 className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-11 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
               />
               <button
@@ -553,6 +596,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           </div>
 
+          {needsSetup && (
+            <div>
+              <label className="block text-xs font-bold text-[#2D3748] mb-2">
+                {t.confirmPasswordLabel}
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder={
+                    isId ? 'Ulangi password...' : 'Confirm password...'
+                  }
+                  className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
+                />
+              </div>
+            </div>
+          )}
+
           {errorMsg && (
             <p className="text-xs font-semibold text-rose-600">{errorMsg}</p>
           )}
@@ -567,15 +631,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 <span>
-                  {storeSettings.language === 'id'
-                    ? 'Memverifikasi...'
-                    : 'Signing in...'}
+                  {isId ? 'Memverifikasi...' : 'Signing in...'}
                 </span>
               </>
             ) : (
               <>
                 <KeyRound className="w-4 h-4" />
-                <span>{t.loginButton}</span>
+                <span>
+                  {needsSetup
+                    ? isId
+                      ? 'Simpan & Masuk ke POS'
+                      : 'Create Admin & Sign In'
+                    : t.loginButton}
+                </span>
               </>
             )}
           </button>

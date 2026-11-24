@@ -110,19 +110,14 @@ export function buildSelfContainedHtml(
         total
       };
       state.orders.unshift(orderRecord);
-      localStorage.setItem('pinkpos_orders_idr', JSON.stringify(state.orders));
+      try {
+        localStorage.setItem('pinkpos_orders_idr', JSON.stringify(state.orders.slice(0, 500)));
+      } catch (err) {
+        console.error('Penyimpanan penuh atau gagal', err);
+      }
       state.orderSuccess = true;
       state.cart = [];
       render();
-
-      try {
-        await fetch(state.config.APPS_SCRIPT_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'saveOrder', ...orderRecord })
-        });
-      } catch (e) {}
     }
 
     function render() {
