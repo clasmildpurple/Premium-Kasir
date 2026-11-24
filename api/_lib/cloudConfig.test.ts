@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
+import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CLOUD_CONFIG_COOKIE_NAME,
+  buildCloudConfigCookieHeader,
   getServerCloudConfig,
   isAllowedAppsScriptUrl,
   resetInMemoryCloudConfigForTests,
@@ -10,10 +13,15 @@ import {
 } from './cloudConfig';
 
 describe('isAllowedAppsScriptUrl', () => {
-  it('accepts valid HTTPS Google Apps Script /macros/ URLs', () => {
+  it('accepts valid HTTPS Google Apps Script /macros/ and Workspace /a/macros/ URLs', () => {
     expect(
       isAllowedAppsScriptUrl(
         'https://script.google.com/macros/s/AKfycbxTestScriptId123/exec'
+      )
+    ).toBe(true);
+    expect(
+      isAllowedAppsScriptUrl(
+        'https://script.google.com/a/macros/sukapos.id/s/AKfycbxWorkspaceId123/exec'
       )
     ).toBe(true);
     expect(
@@ -131,5 +139,42 @@ describe('external cloud config storage', () => {
       'https://script.google.com/macros/s/AKfycbxEnvFallback/exec'
     );
     expect(loaded.appsScriptToken).toBe('env-secret-token-1234567890');
+  });
+
+  it('recovers encrypted cloud config from HttpOnly cookie when disk/memory are unavailable', async () => {
+    const emptyExternalFile = path.join(tempDir, 'empty-cookie-db.config.json');
+    await fs.writeFile(
+      emptyExternalFile,
+      JSON.stringify({ appsScriptUrl: '', appsScriptToken: '' }),
+      'utf-8'
+    );
+    process.env.DATABASE_CONFIG_PATH = emptyExternalFile;
+
+    const reqForCookie = {
+      headers: { 'x-forwarded-proto': 'https', 'sec-fetch-site': 'cross-site' },
+      socket: {},
+    } as unknown as IncomingMessage;
+
+    const setCookie = buildCloudConfigCookieHeader(reqForCookie, {
+      appsScriptUrl:
+        'https://script.google.com/a/macros/sukapos.id/s/AKfycbxCookieTest/exec',
+      appsScriptToken: 'cookie-secret-token-9876543210',
+    });
+
+    const cookiePair = setCookie.split(';')[0];
+    expect(cookiePair.startsWith(`${CLOUD_CONFIG_COOKIE_NAME}=`)).toBe(true);
+    expect(cookiePair).not.toContain('cookie-secret-token-9876543210');
+
+    const nextReq = {
+      headers: { cookie: cookiePair },
+      socket: {},
+    } as unknown as IncomingMessage;
+
+    const loaded = await getServerCloudConfig(nextReq);
+    expect(loaded.source).toBe('external-file');
+    expect(loaded.appsScriptUrl).toBe(
+      'https://script.google.com/a/macros/sukapos.id/s/AKfycbxCookieTest/exec'
+    );
+    expect(loaded.appsScriptToken).toBe('cookie-secret-token-9876543210');
   });
 });

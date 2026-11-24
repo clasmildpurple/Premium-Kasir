@@ -1,5 +1,6 @@
 import { getAuthenticatedSession } from './_lib/auth.js';
 import {
+  buildCloudConfigCookieHeader,
   getServerCloudConfig,
   isAllowedAppsScriptUrl,
   saveExternalCloudConfig,
@@ -25,7 +26,7 @@ export default async function handler(
   const method = (req.method || 'GET').toUpperCase();
 
   if (method === 'GET') {
-    const cfg = await getServerCloudConfig();
+    const cfg = await getServerCloudConfig(req);
     const configured =
       Boolean(cfg.appsScriptUrl) &&
       Boolean(cfg.appsScriptToken) &&
@@ -61,7 +62,7 @@ export default async function handler(
       return;
     }
 
-    const existing = await getServerCloudConfig();
+    const existing = await getServerCloudConfig(req);
     const nextUrl =
       typeof body.appsScriptUrl === 'string'
         ? body.appsScriptUrl.trim()
@@ -81,7 +82,7 @@ export default async function handler(
     if (!isAllowedAppsScriptUrl(nextUrl)) {
       sendJson(res, 400, {
         error:
-          'URL Apps Script tidak valid. Harus HTTPS dengan format https://script.google.com/macros/s/.../exec',
+          'URL Apps Script tidak valid. Harus HTTPS dengan format https://script.google.com/macros/s/.../exec (atau /a/macros/.../exec)',
       });
       return;
     }
@@ -94,7 +95,7 @@ export default async function handler(
       return;
     }
 
-    const saved = await saveExternalCloudConfig({
+    const nextConfigPayload = {
       appsScriptUrl: nextUrl,
       appsScriptToken: nextToken,
       googleSheetUrl:
@@ -105,17 +106,25 @@ export default async function handler(
         typeof body.googleDriveFolderUrl === 'string'
           ? body.googleDriveFolderUrl.trim()
           : existing.googleDriveFolderUrl,
-    });
+    };
 
-    sendJson(res, 200, {
-      ok: true,
-      configured: true,
-      source: 'external-file',
-      configFilePath: saved.configFilePath,
-      savedToDisk: saved.savedToDisk,
-      appsScriptUrl: nextUrl,
-      hasToken: true,
-    });
+    const saved = await saveExternalCloudConfig(nextConfigPayload);
+    const configCookie = buildCloudConfigCookieHeader(req, nextConfigPayload);
+
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        configured: true,
+        source: 'external-file',
+        configFilePath: saved.configFilePath,
+        savedToDisk: saved.savedToDisk,
+        appsScriptUrl: nextUrl,
+        hasToken: true,
+      },
+      { 'Set-Cookie': configCookie }
+    );
     return;
   }
 

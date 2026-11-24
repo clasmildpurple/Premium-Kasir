@@ -59,10 +59,11 @@ interface GoogleCloudIntegrationPanelProps {
   ) => Promise<void>;
   products: ProductItem[];
   activeUsername?: string;
-  onSyncAllToCloud?: () => Promise<void>;
-  onPullFromCloud?: () => Promise<void>;
+  onSyncAllToCloud?: () => Promise<boolean | void>;
+  onPullFromCloud?: () => Promise<{ ok: boolean; error?: string } | void>;
   lastSyncedAt?: string;
   syncStatus?: 'connected' | 'local_realtime' | 'syncing';
+  lastCloudSyncError?: string | null;
 }
 
 const TAX_RATE_PRESETS = [0, 5, 10, 11, 12];
@@ -85,6 +86,7 @@ export const GoogleCloudIntegrationPanel: React.FC<
   onPullFromCloud,
   lastSyncedAt,
   syncStatus = 'local_realtime',
+  lastCloudSyncError = null,
 }) => {
   const t = TRANSLATIONS[storeSettings.language as Language];
   const isId = storeSettings.language === 'id';
@@ -404,6 +406,15 @@ export const GoogleCloudIntegrationPanel: React.FC<
           : googleSheetUrl.trim();
       let savedExternalPath: string | undefined;
 
+      if (!trimmedScriptUrl && !cloudConfigMeta?.configured) {
+        setConfigErrorBanner(
+          isId
+            ? 'URL Web App Google Apps Script (/exec) dan API Token wajib diisi.'
+            : 'Google Apps Script Web App URL (/exec) and API Token are required.'
+        );
+        return;
+      }
+
       if (trimmedScriptUrl || trimmedScriptToken) {
         const cfgRes = await fetch('/api/cloud-config', {
           method: 'POST',
@@ -425,6 +436,15 @@ export const GoogleCloudIntegrationPanel: React.FC<
           error?: string;
           configFilePath?: string;
         };
+
+        if (cfgRes.status === 401) {
+          setConfigErrorBanner(
+            isId
+              ? 'Sesi login Anda tidak aktif atau cookie terblokir. Silakan logout lalu login ulang (atau buka aplikasi di tab baru).'
+              : 'Your login session is inactive or blocked by cookies. Please log in again or open the app in a new tab.'
+          );
+          return;
+        }
 
         if (!cfgRes.ok || !cfgData.ok) {
           setConfigErrorBanner(
@@ -1126,12 +1146,19 @@ export const GoogleCloudIntegrationPanel: React.FC<
                       ? 'Database Belum Terhubung'
                       : 'Database Not Configured'}
                   </span>
-                ) : (
+                ) : syncStatus === 'connected' && !lastCloudSyncError ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     {isId
                       ? 'Terhubung Aman (/api/cloud)'
                       : 'Securely Connected (/api/cloud)'}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    {isId
+                      ? 'Tersimpan — Belum Terhubung'
+                      : 'Saved — Not Connected'}
                   </span>
                 )}
                 {offlineQueueCount > 0 && (
@@ -1154,9 +1181,13 @@ export const GoogleCloudIntegrationPanel: React.FC<
                   ? isId
                     ? 'Isi URL Apps Script & API Token di form bawah (tersimpan di file eksternal) atau via Environment Variables.'
                     : 'Enter your Apps Script URL & API Token below (saved to external config file) or via Environment Variables.'
+                  : syncStatus === 'connected' && !lastCloudSyncError
+                  ? isId
+                    ? `Semua permintaan diteruskan aman lewat proxy server /api/cloud (${products.length} produk aktif${lastSyncedAt ? ` · Update: ${lastSyncedAt}` : ''})`
+                    : `All requests flow securely through /api/cloud proxy (${products.length} active products${lastSyncedAt ? ` · Last sync: ${lastSyncedAt}` : ''})`
                   : isId
-                  ? `Semua permintaan diteruskan aman lewat proxy server /api/cloud (${products.length} produk aktif${lastSyncedAt ? ` · Update: ${lastSyncedAt}` : ''})`
-                  : `All requests flow securely through /api/cloud proxy (${products.length} active products${lastSyncedAt ? ` · Last sync: ${lastSyncedAt}` : ''})`}
+                  ? 'Konfigurasi tersimpan, namun koneksi ke Apps Script gagal. Periksa pesan error di bawah.'
+                  : 'Configuration saved, but connecting to Apps Script failed. See error details below.'}
               </p>
             </div>
           </div>
@@ -1169,10 +1200,15 @@ export const GoogleCloudIntegrationPanel: React.FC<
                 onClick={async () => {
                   setIsPullingCloud(true);
                   setPullCloudSuccess(false);
+                  setConfigErrorBanner(null);
                   try {
-                    await onPullFromCloud();
-                    setPullCloudSuccess(true);
-                    setTimeout(() => setPullCloudSuccess(false), 3000);
+                    const res = await onPullFromCloud();
+                    if (res && !res.ok) {
+                      if (res.error) setConfigErrorBanner(res.error);
+                    } else {
+                      setPullCloudSuccess(true);
+                      setTimeout(() => setPullCloudSuccess(false), 3000);
+                    }
                   } finally {
                     setIsPullingCloud(false);
                   }
@@ -1205,10 +1241,19 @@ export const GoogleCloudIntegrationPanel: React.FC<
                 onClick={async () => {
                   setIsSyncingAll(true);
                   setSyncAllSuccess(false);
+                  setConfigErrorBanner(null);
                   try {
-                    await onSyncAllToCloud();
-                    setSyncAllSuccess(true);
-                    setTimeout(() => setSyncAllSuccess(false), 3500);
+                    const ok = await onSyncAllToCloud();
+                    if (ok === false) {
+                      setConfigErrorBanner(
+                        isId
+                          ? 'Gagal mengirim data ke Google Sheet. Periksa URL Web App dan API Token.'
+                          : 'Failed to push data to Google Sheet. Check Web App URL and API Token.'
+                      );
+                    } else {
+                      setSyncAllSuccess(true);
+                      setTimeout(() => setSyncAllSuccess(false), 3500);
+                    }
                   } finally {
                     setIsSyncingAll(false);
                   }
@@ -1235,6 +1280,18 @@ export const GoogleCloudIntegrationPanel: React.FC<
             )}
           </div>
         </div>
+
+        {(configErrorBanner || lastCloudSyncError || savedBanner) && (
+          <div
+            className={`rounded-2xl px-4 py-3 text-xs font-semibold border ${
+              configErrorBanner || lastCloudSyncError
+                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            }`}
+          >
+            {configErrorBanner || lastCloudSyncError || savedBanner}
+          </div>
+        )}
 
         {/* Panduan Keamanan Proxy Server (/api/cloud) & File Pengaturan Eksternal */}
         <div className="rounded-2xl bg-[#F8F9FA] border border-slate-200/80 p-4 space-y-2.5 text-xs text-slate-600">
@@ -1494,9 +1551,9 @@ export const GoogleCloudIntegrationPanel: React.FC<
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
           <div className="text-xs text-slate-500">
-            {configErrorBanner ? (
+            {configErrorBanner || lastCloudSyncError ? (
               <span className="text-rose-600 font-semibold">
-                {configErrorBanner}
+                {configErrorBanner || lastCloudSyncError}
               </span>
             ) : savedBanner ? (
               <span className="text-emerald-600 font-semibold">

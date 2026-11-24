@@ -13,7 +13,7 @@ export default async function handler(
     return;
   }
 
-  const creds = await getActiveAdminCredentials();
+  const creds = await getActiveAdminCredentials(req);
   const needsSetup = creds.source === 'unset';
   const session = getAuthenticatedSession(req);
 

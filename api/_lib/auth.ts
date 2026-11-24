@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
@@ -6,15 +7,59 @@ import path from 'node:path';
 import { getClientIp, parseCookies } from './http.js';
 
 export const SESSION_COOKIE_NAME = 'pinkpos_session';
+export const ADMIN_RECORD_COOKIE_NAME = 'pinkpos_admin_cfg';
 export const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 hours
+export const ADMIN_RECORD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
-const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
+const PRIMARY_DATA_DIR = path.resolve(process.cwd(), '.data');
+const PRIMARY_CRED_PATH = path.join(PRIMARY_DATA_DIR, 'auth.json');
+const FALLBACK_CRED_PATH = path.join(os.tmpdir(), 'pinkpos-auth.json');
+const PRIMARY_SECRET_PATH = path.join(PRIMARY_DATA_DIR, 'session-secret');
+const FALLBACK_SECRET_PATH = path.join(os.tmpdir(), 'pinkpos-session-secret');
 
-function getSessionSecret(): string {
+let cachedFallbackSecret: string | null = null;
+
+function loadOrCreatePersistentSecret(): string {
+  if (cachedFallbackSecret) return cachedFallbackSecret;
+
+  const secretCandidates = process.env.VERCEL
+    ? [FALLBACK_SECRET_PATH]
+    : [PRIMARY_SECRET_PATH, FALLBACK_SECRET_PATH];
+
+  for (const candidate of secretCandidates) {
+    try {
+      const existing = fsSync.readFileSync(candidate, 'utf-8').trim();
+      if (existing.length >= 32) {
+        cachedFallbackSecret = existing;
+        return existing;
+      }
+    } catch {
+      // ignore if not found
+    }
+  }
+
+  const generated = crypto.randomBytes(32).toString('hex');
+  cachedFallbackSecret = generated;
+
+  for (const candidate of secretCandidates) {
+    try {
+      fsSync.mkdirSync(path.dirname(candidate), { recursive: true });
+      fsSync.writeFileSync(candidate, generated, { encoding: 'utf-8', mode: 0o600 });
+      break;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return generated;
+}
+
+export function getSessionSecret(): string {
   const envSecret = process.env.SESSION_SECRET?.trim();
-  return envSecret && envSecret.length >= 16
-    ? envSecret
-    : EPHEMERAL_FALLBACK_SECRET;
+  if (envSecret && envSecret.length >= 16) {
+    return envSecret;
+  }
+  return loadOrCreatePersistentSecret();
 }
 
 // Runtime credential override store (for password changes / first-run setup when env is unset)
@@ -24,27 +69,33 @@ interface StoredCredentials {
   updatedAt: string;
 }
 
-const RUNTIME_CRED_PATH = process.env.VERCEL
-  ? path.join(os.tmpdir(), 'pinkpos-auth.json')
-  : path.resolve(process.cwd(), '.data', 'auth.json');
-
 let inMemoryCredentials: StoredCredentials | null = null;
+
+function getCredentialReadPaths(): string[] {
+  return process.env.VERCEL
+    ? [FALLBACK_CRED_PATH]
+    : [PRIMARY_CRED_PATH, FALLBACK_CRED_PATH];
+}
 
 async function readRuntimeCredentials(): Promise<StoredCredentials | null> {
   if (inMemoryCredentials) return inMemoryCredentials;
-  try {
-    const raw = await fs.readFile(RUNTIME_CRED_PATH, 'utf-8');
-    const parsed = JSON.parse(raw) as StoredCredentials;
-    if (
-      parsed &&
-      typeof parsed.username === 'string' &&
-      typeof parsed.passwordHash === 'string'
-    ) {
-      inMemoryCredentials = parsed;
-      return parsed;
+  for (const credPath of getCredentialReadPaths()) {
+    try {
+      const raw = await fs.readFile(credPath, 'utf-8');
+      const parsed = JSON.parse(raw) as StoredCredentials;
+      if (
+        parsed &&
+        typeof parsed.username === 'string' &&
+        typeof parsed.passwordHash === 'string' &&
+        parsed.username.trim() &&
+        parsed.passwordHash.includes(':')
+      ) {
+        inMemoryCredentials = parsed;
+        return parsed;
+      }
+    } catch {
+      // try next path
     }
-  } catch {
-    // ignore if file does not exist
   }
   return null;
 }
@@ -59,49 +110,16 @@ export async function saveRuntimeCredentials(
     updatedAt: new Date().toISOString(),
   };
   inMemoryCredentials = record;
-  try {
-    await fs.mkdir(path.dirname(RUNTIME_CRED_PATH), { recursive: true });
-    await fs.writeFile(
-      RUNTIME_CRED_PATH,
-      JSON.stringify(record, null, 2),
-      'utf-8'
-    );
-  } catch {
-    // Keep in-memory copy even if disk is read-only
+
+  for (const credPath of getCredentialReadPaths()) {
+    try {
+      await fs.mkdir(path.dirname(credPath), { recursive: true });
+      await fs.writeFile(credPath, JSON.stringify(record, null, 2), 'utf-8');
+      return;
+    } catch {
+      // try fallback path (e.g. os.tmpdir()) if .data is read-only
+    }
   }
-}
-
-export async function getActiveAdminCredentials(): Promise<{
-  username: string;
-  passwordHash: string;
-  source: 'env' | 'runtime' | 'unset';
-}> {
-  const runtimeCreds = await readRuntimeCredentials();
-  const envHash = process.env.ADMIN_PASSWORD_HASH?.trim() || '';
-  const envUser = process.env.ADMIN_USERNAME?.trim() || '';
-
-  // If runtime password change happened after boot, honor runtime credentials
-  if (runtimeCreds) {
-    return {
-      username: runtimeCreds.username,
-      passwordHash: runtimeCreds.passwordHash,
-      source: 'runtime',
-    };
-  }
-
-  if (envUser && envHash) {
-    return {
-      username: envUser,
-      passwordHash: envHash,
-      source: 'env',
-    };
-  }
-
-  return {
-    username: envUser,
-    passwordHash: '',
-    source: 'unset',
-  };
 }
 
 // ============================================================================
@@ -133,12 +151,18 @@ export function verifyPasswordScrypt(
 }
 
 // ============================================================================
-// SIGNED HMAC SESSION TOKEN (12-hour TTL)
+// SIGNED HMAC TOKENS & COOKIES
 // ============================================================================
 export interface SessionPayload {
   sub: string;
   iat: number;
   exp: number;
+}
+
+interface AdminRecordPayload {
+  u: string;
+  h: string;
+  iat: number;
 }
 
 function toBase64Url(input: Buffer | string): string {
@@ -156,14 +180,8 @@ function fromBase64Url(input: string): Buffer {
   return Buffer.from(padded + '='.repeat(padLen), 'base64');
 }
 
-export function signSessionToken(username: string): string {
-  const now = Math.floor(Date.now() / 1000);
-  const payload: SessionPayload = {
-    sub: username,
-    iat: now,
-    exp: now + SESSION_TTL_SECONDS,
-  };
-  const payloadB64 = toBase64Url(JSON.stringify(payload));
+function signSignedPayload(payloadObj: unknown): string {
+  const payloadB64 = toBase64Url(JSON.stringify(payloadObj));
   const sig = crypto
     .createHmac('sha256', getSessionSecret())
     .update(payloadB64)
@@ -171,7 +189,7 @@ export function signSessionToken(username: string): string {
   return `${payloadB64}.${toBase64Url(sig)}`;
 }
 
-export function verifySessionToken(token: string): SessionPayload | null {
+function verifySignedPayload<T>(token: string): T | null {
   if (!token || typeof token !== 'string') return null;
   const dotIdx = token.indexOf('.');
   if (dotIdx <= 0) return null;
@@ -189,23 +207,34 @@ export function verifySessionToken(token: string): SessionPayload | null {
     if (expectedSig.length !== actualSig.length) return null;
     if (!crypto.timingSafeEqual(expectedSig, actualSig)) return null;
 
-    const payload = JSON.parse(
-      fromBase64Url(payloadB64).toString('utf-8')
-    ) as SessionPayload;
-
-    const now = Math.floor(Date.now() / 1000);
-    if (
-      !payload ||
-      typeof payload.sub !== 'string' ||
-      typeof payload.exp !== 'number' ||
-      payload.exp <= now
-    ) {
-      return null;
-    }
-    return payload;
+    return JSON.parse(fromBase64Url(payloadB64).toString('utf-8')) as T;
   } catch {
     return null;
   }
+}
+
+export function signSessionToken(username: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const payload: SessionPayload = {
+    sub: username,
+    iat: now,
+    exp: now + SESSION_TTL_SECONDS,
+  };
+  return signSignedPayload(payload);
+}
+
+export function verifySessionToken(token: string): SessionPayload | null {
+  const payload = verifySignedPayload<SessionPayload>(token);
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    !payload ||
+    typeof payload.sub !== 'string' ||
+    typeof payload.exp !== 'number' ||
+    payload.exp <= now
+  ) {
+    return null;
+  }
+  return payload;
 }
 
 export function getAuthenticatedSession(
@@ -217,21 +246,105 @@ export function getAuthenticatedSession(
   return verifySessionToken(token);
 }
 
-export function buildSessionCookieHeader(
-  req: IncomingMessage,
-  token: string,
-  maxAgeSeconds = SESSION_TTL_SECONDS
-): string {
-  const isHttps =
-    req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.VERCEL === '1' ||
-    process.env.NODE_ENV === 'production';
+function readAdminRecordFromCookie(
+  req: IncomingMessage
+): StoredCredentials | null {
+  const cookies = parseCookies(req);
+  const rawToken = cookies[ADMIN_RECORD_COOKIE_NAME];
+  if (!rawToken) return null;
+  const payload = verifySignedPayload<AdminRecordPayload>(rawToken);
+  if (
+    !payload ||
+    typeof payload.u !== 'string' ||
+    typeof payload.h !== 'string' ||
+    !payload.u.trim() ||
+    !payload.h.includes(':')
+  ) {
+    return null;
+  }
+  return {
+    username: payload.u.trim(),
+    passwordHash: payload.h,
+    updatedAt: new Date((payload.iat || 0) * 1000).toISOString(),
+  };
+}
 
-  const isCrossSiteIframe = req.headers['sec-fetch-site'] === 'cross-site';
-  const sameSite = isCrossSiteIframe && isHttps ? 'SameSite=None' : 'SameSite=Lax';
+export async function getActiveAdminCredentials(req?: IncomingMessage): Promise<{
+  username: string;
+  passwordHash: string;
+  source: 'env' | 'runtime' | 'unset';
+}> {
+  const runtimeCreds = await readRuntimeCredentials();
+  const envHash = process.env.ADMIN_PASSWORD_HASH?.trim() || '';
+  const envUser = process.env.ADMIN_USERNAME?.trim() || '';
+
+  // If runtime setup/password change happened on this server, honor it first
+  if (runtimeCreds) {
+    return {
+      username: runtimeCreds.username,
+      passwordHash: runtimeCreds.passwordHash,
+      source: 'runtime',
+    };
+  }
+
+  if (envUser && envHash) {
+    return {
+      username: envUser,
+      passwordHash: envHash,
+      source: 'env',
+    };
+  }
+
+  // Fallback for stateless serverless or ephemeral containers: signed HttpOnly admin record cookie
+  if (req) {
+    const cookieCreds = readAdminRecordFromCookie(req);
+    if (cookieCreds) {
+      inMemoryCredentials = cookieCreds;
+      return {
+        username: cookieCreds.username,
+        passwordHash: cookieCreds.passwordHash,
+        source: 'runtime',
+      };
+    }
+  }
+
+  return {
+    username: envUser,
+    passwordHash: '',
+    source: 'unset',
+  };
+}
+
+function isHttpsRequest(req: IncomingMessage): boolean {
+  const fwdProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  return (
+    fwdProto.includes('https') ||
+    origin.startsWith('https://') ||
+    referer.startsWith('https://') ||
+    process.env.VERCEL === '1' ||
+    process.env.NODE_ENV === 'production'
+  );
+}
+
+export function buildCookieHeader(
+  req: IncomingMessage,
+  name: string,
+  value: string,
+  maxAgeSeconds: number
+): string {
+  const isHttps = isHttpsRequest(req);
+  const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  const secFetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+  const isCrossSite =
+    secFetchSite === 'cross-site' ||
+    secFetchDest === 'iframe' ||
+    (isHttps && secFetchSite !== 'same-origin');
+  const sameSite = isCrossSite && isHttps ? 'SameSite=None' : 'SameSite=Lax';
 
   const parts = [
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    `${name}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
     `Max-Age=${maxAgeSeconds}`,
@@ -240,10 +353,37 @@ export function buildSessionCookieHeader(
   if (isHttps) {
     parts.push('Secure');
   }
-  if (isCrossSiteIframe && isHttps) {
+  if (isCrossSite && isHttps) {
     parts.push('Partitioned');
   }
   return parts.join('; ');
+}
+
+export function buildSessionCookieHeader(
+  req: IncomingMessage,
+  token: string,
+  maxAgeSeconds = SESSION_TTL_SECONDS
+): string {
+  return buildCookieHeader(req, SESSION_COOKIE_NAME, token, maxAgeSeconds);
+}
+
+export function buildAdminRecordCookieHeader(
+  req: IncomingMessage,
+  username: string,
+  passwordHash: string
+): string {
+  const payload: AdminRecordPayload = {
+    u: username.trim(),
+    h: passwordHash,
+    iat: Math.floor(Date.now() / 1000),
+  };
+  const signed = signSignedPayload(payload);
+  return buildCookieHeader(
+    req,
+    ADMIN_RECORD_COOKIE_NAME,
+    signed,
+    ADMIN_RECORD_TTL_SECONDS
+  );
 }
 
 // ============================================================================

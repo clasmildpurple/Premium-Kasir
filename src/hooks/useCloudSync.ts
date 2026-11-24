@@ -92,6 +92,9 @@ export function useCloudSync({
   const [twoWaySyncStatus, setTwoWaySyncStatus] = useState<
     'connected' | 'local_realtime' | 'syncing'
   >('local_realtime');
+  const [lastCloudSyncError, setLastCloudSyncError] = useState<string | null>(
+    null
+  );
 
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(() => {
     try {
@@ -203,7 +206,11 @@ export function useCloudSync({
       try {
         await fetch('/api/state', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
           body: JSON.stringify(patch),
         });
       } catch {
@@ -453,14 +460,28 @@ export function useCloudSync({
         });
 
         if (res.status === 503) {
+          const errBody = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
           setIsCloudConfigured(false);
           setTwoWaySyncStatus('local_realtime');
+          setLastCloudSyncError(
+            errBody.error ||
+              'Database Apps Script belum dikonfigurasi di server.'
+          );
           if (shouldQueueOnFail) enqueueOfflineSync(payload);
           return null;
         }
 
         if (!res.ok) {
+          const errBody = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
           setTwoWaySyncStatus('local_realtime');
+          setLastCloudSyncError(
+            errBody.error ||
+              `Gagal sinkronisasi ke /api/cloud (HTTP ${res.status}).`
+          );
           if (shouldQueueOnFail && res.status !== 401 && res.status !== 403) {
             enqueueOfflineSync(payload);
           }
@@ -473,6 +494,7 @@ export function useCloudSync({
         > | null;
 
         setIsCloudConfigured(true);
+        setLastCloudSyncError(null);
         const syncedTime = new Date().toLocaleTimeString('id-ID');
         setLastTwoWaySyncAt(syncedTime);
         setTwoWaySyncStatus('connected');
@@ -501,6 +523,7 @@ export function useCloudSync({
         return data;
       } catch {
         setTwoWaySyncStatus('local_realtime');
+        setLastCloudSyncError('Gagal menghubungi server proxy /api/cloud.');
         if (shouldQueueOnFail) enqueueOfflineSync(payload);
         return null;
       } finally {
@@ -586,7 +609,7 @@ export function useCloudSync({
     };
   }, [flushOfflineQueue]);
 
-  const handleSyncAllToCloud = useCallback(async () => {
+  const handleSyncAllToCloud = useCallback(async (): Promise<boolean> => {
     const current = latestStateRef.current;
     const cleanSettings = sanitizeStoreSettings(current.storeSettings);
     broadcastStateChange('PRODUCTS_UPDATED', current.products);
@@ -594,13 +617,14 @@ export function useCloudSync({
     broadcastStateChange('ORDERS_UPDATED', current.orders);
     broadcastStateChange('SETTINGS_UPDATED', cleanSettings);
 
-    await pushToCloudDatabase({
+    const res = await pushToCloudDatabase({
       action: 'syncAll',
       products: current.products,
       orders: current.orders,
       categories: current.categories,
       storeSettings: cleanSettings,
     });
+    return Boolean(res);
   }, [pushToCloudDatabase, broadcastStateChange]);
 
   const applyRemoteDatabaseData = useCallback(
@@ -846,13 +870,15 @@ export function useCloudSync({
         });
 
         if (res.status === 503) {
+          const errMsg =
+            'Database Apps Script belum dihubungkan. Silakan isi URL Web App (/exec) & API Token di menu Setting.';
           setIsCloudConfigured(false);
           setTwoWaySyncStatus('local_realtime');
+          setLastCloudSyncError(errMsg);
           return {
             ok: false,
             pulledFromSheet: false,
-            error:
-              'Database Apps Script belum dihubungkan. Silakan isi URL Web App (/exec) & API Token di menu Setting.',
+            error: errMsg,
           };
         }
 
@@ -860,13 +886,15 @@ export function useCloudSync({
           const errBody = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
+          const errMsg =
+            errBody.error ||
+            'Gagal membaca data dari /api/cloud. Periksa koneksi & token Apps Script.';
           setTwoWaySyncStatus('local_realtime');
+          setLastCloudSyncError(errMsg);
           return {
             ok: false,
             pulledFromSheet: false,
-            error:
-              errBody.error ||
-              'Gagal membaca data dari /api/cloud. Periksa koneksi & token Apps Script.',
+            error: errMsg,
           };
         }
 
@@ -876,6 +904,7 @@ export function useCloudSync({
         > | null;
 
         setIsCloudConfigured(true);
+        setLastCloudSyncError(null);
         if (remoteData && typeof remoteData === 'object') {
           const applied = applyRemoteDatabaseData(
             remoteData as Parameters<typeof applyRemoteDatabaseData>[0],
@@ -887,11 +916,13 @@ export function useCloudSync({
         setTwoWaySyncStatus('connected');
         return { ok: true, pulledFromSheet: false };
       } catch {
+        const errMsg = 'Gagal menghubungi server proxy /api/cloud.';
         setTwoWaySyncStatus('local_realtime');
+        setLastCloudSyncError(errMsg);
         return {
           ok: false,
           pulledFromSheet: false,
-          error: 'Gagal menghubungi server proxy /api/cloud.',
+          error: errMsg,
         };
       }
     },
@@ -926,7 +957,16 @@ export function useCloudSync({
         !result.pulledFromSheet &&
         latestStateRef.current.products.length > 0
       ) {
-        await handleSyncAllToCloud();
+        const pushed = await handleSyncAllToCloud();
+        if (!pushed) {
+          return {
+            ok: false,
+            pulledFromSheet: false,
+            autoInitialized: false,
+            error:
+              'Terhubung untuk membaca Sheet kosong, tetapi gagal menginisialisasi data awal ke Google Sheets.',
+          };
+        }
         autoInitialized = true;
       }
 
@@ -1096,6 +1136,7 @@ export function useCloudSync({
     isDbConfigured,
     twoWaySyncStatus,
     lastTwoWaySyncAt,
+    lastCloudSyncError,
     offlineQueueCount,
     isOnline,
     latestStateRef,

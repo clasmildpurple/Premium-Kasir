@@ -32,7 +32,7 @@ export default async function handler(
   }
 
   const method = (req.method || 'GET').toUpperCase();
-  const { appsScriptUrl, appsScriptToken } = await getServerCloudConfig();
+  const { appsScriptUrl, appsScriptToken } = await getServerCloudConfig(req);
 
   // Status probe so UI knows whether server/external cloud config is ready without leaking token
   if (method === 'GET' && req.query?.mode === 'status') {
@@ -85,8 +85,11 @@ export default async function handler(
       try {
         parsed = JSON.parse(rawText) as Record<string, unknown>;
       } catch {
+        const looksLikeHtml = rawText.trim().startsWith('<');
         sendJson(res, 502, {
-          error: 'Respons Apps Script tidak valid (bukan JSON).',
+          error: looksLikeHtml
+            ? 'Apps Script mengembalikan halaman HTML/login (bukan JSON). Pastikan Web App di-deploy dengan "Who has access: Anyone" dan URL berakhiran /exec.'
+            : 'Respons Apps Script tidak valid (bukan JSON).',
         });
         return;
       }
@@ -94,7 +97,14 @@ export default async function handler(
       if (parsed.error === 'unauthorized') {
         sendJson(res, 502, {
           error:
-            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan APPS_SCRIPT_TOKEN di server.',
+            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan API Token pada pengaturan database.',
+        });
+        return;
+      }
+
+      if (typeof parsed.error === 'string' && parsed.error) {
+        sendJson(res, 502, {
+          error: `Apps Script error: ${parsed.error}`,
         });
         return;
       }
@@ -165,8 +175,11 @@ export default async function handler(
       try {
         parsed = JSON.parse(rawText) as Record<string, unknown>;
       } catch {
+        const looksLikeHtml = rawText.trim().startsWith('<');
         sendJson(res, 502, {
-          error: 'Respons Apps Script tidak valid (bukan JSON).',
+          error: looksLikeHtml
+            ? 'Apps Script mengembalikan halaman HTML/login (bukan JSON). Pastikan Web App di-deploy dengan "Who has access: Anyone" dan URL berakhiran /exec.'
+            : 'Respons Apps Script tidak valid (bukan JSON).',
         });
         return;
       }
@@ -174,7 +187,14 @@ export default async function handler(
       if (parsed.error === 'unauthorized') {
         sendJson(res, 502, {
           error:
-            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan APPS_SCRIPT_TOKEN di server.',
+            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan API Token pada pengaturan database.',
+        });
+        return;
+      }
+
+      if (typeof parsed.error === 'string' && parsed.error) {
+        sendJson(res, 502, {
+          error: `Apps Script error: ${parsed.error}`,
         });
         return;
       }

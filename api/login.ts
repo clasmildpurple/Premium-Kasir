@@ -1,4 +1,5 @@
 import {
+  buildAdminRecordCookieHeader,
   buildSessionCookieHeader,
   checkLoginRateLimit,
   clearLoginFailures,
@@ -53,7 +54,7 @@ export default async function handler(
     return;
   }
 
-  const creds = await getActiveAdminCredentials();
+  const creds = await getActiveAdminCredentials(req);
   if (creds.source === 'unset' || !creds.passwordHash || !creds.username) {
     sendJson(res, 503, {
       error:
@@ -90,6 +91,13 @@ export default async function handler(
 
   const token = signSessionToken(creds.username);
   const cookieHeader = buildSessionCookieHeader(req, token);
+  const cookies =
+    creds.source === 'runtime'
+      ? [
+          cookieHeader,
+          buildAdminRecordCookieHeader(req, creds.username, creds.passwordHash),
+        ]
+      : [cookieHeader];
 
   sendJson(
     res,
@@ -98,6 +106,6 @@ export default async function handler(
       authenticated: true,
       username: creds.username,
     },
-    { 'Set-Cookie': cookieHeader }
+    { 'Set-Cookie': cookies }
   );
 }

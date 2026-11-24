@@ -96,6 +96,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
         return;
       }
 
+      // Verify that browser accepted and sends back the HttpOnly session cookie across refreshes
+      const sessionRes = await fetch('/api/session', {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (sessionRes.ok) {
+        const sessionData = (await sessionRes.json().catch(() => ({}))) as {
+          authenticated?: boolean;
+        };
+        if (!sessionData.authenticated) {
+          setErrorMsg(
+            isId
+              ? 'Browser memblokir cookie sesi di tampilan preview/iframe. Silakan buka aplikasi di tab baru atau izinkan cookie pihak ketiga agar sesi tidak hilang saat refresh.'
+              : 'Your browser blocked the session cookie inside the preview iframe. Please open the app in a new tab or allow cookies so your session persists on refresh.'
+          );
+          return;
+        }
+      }
+
       const authedUser = data.username || trimmedUser;
       const displayUser = authedUser.includes('@')
         ? authedUser.split('@')[0]

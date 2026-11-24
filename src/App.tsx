@@ -168,6 +168,7 @@ export default function App() {
     isDbConfigured,
     twoWaySyncStatus,
     lastTwoWaySyncAt,
+    lastCloudSyncError,
     offlineQueueCount,
     isOnline,
     latestStateRef,
@@ -881,12 +882,13 @@ export default function App() {
                         activeUsername={cashierName}
                         onSyncAllToCloud={handleSyncAllToCloud}
                         onPullFromCloud={async () => {
-                          await handleSyncTwoWay(true);
+                          return await handleSyncTwoWay(true);
                         }}
                         lastSyncedAt={
                           lastTwoWaySyncAt || googleConfig.LAST_SYNCED
                         }
                         syncStatus={twoWaySyncStatus}
+                        lastCloudSyncError={lastCloudSyncError}
                       />
                     </div>
                   )}

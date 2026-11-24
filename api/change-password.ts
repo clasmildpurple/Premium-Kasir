@@ -1,4 +1,5 @@
 import {
+  buildAdminRecordCookieHeader,
   buildSessionCookieHeader,
   getActiveAdminCredentials,
   getAuthenticatedSession,
@@ -69,7 +70,7 @@ export default async function handler(
     return;
   }
 
-  const creds = await getActiveAdminCredentials();
+  const creds = await getActiveAdminCredentials(req);
   if (creds.source === 'unset' || !creds.passwordHash) {
     sendJson(res, 503, { error: 'Akun admin belum dikonfigurasi.' });
     return;
@@ -85,6 +86,11 @@ export default async function handler(
 
   const refreshedToken = signSessionToken(creds.username);
   const cookieHeader = buildSessionCookieHeader(req, refreshedToken);
+  const adminRecordCookie = buildAdminRecordCookieHeader(
+    req,
+    creds.username,
+    nextHash
+  );
 
   sendJson(
     res,
@@ -93,6 +99,6 @@ export default async function handler(
       ok: true,
       message: 'Password berhasil diperbarui dengan aman.',
     },
-    { 'Set-Cookie': cookieHeader }
+    { 'Set-Cookie': [cookieHeader, adminRecordCookie] }
   );
 }

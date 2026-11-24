@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import loginHandler from './api/login.js';
@@ -19,6 +20,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 const DATA_DIR = path.resolve(__dirname, '.data');
 const STATE_FILE = path.join(DATA_DIR, 'pos-state.json');
+const FALLBACK_STATE_FILE = path.join(os.tmpdir(), 'pinkpos-pos-state.json');
 
 interface PersistedState {
   googleConfig?: Record<string, unknown>;
@@ -52,26 +54,27 @@ function sanitizeGoogleConfigRecord(
 }
 
 async function readPersistedState(): Promise<PersistedState | null> {
-  try {
-    const raw = await fs.readFile(STATE_FILE, 'utf-8');
-    const parsed = JSON.parse(raw) as PersistedState;
-    if (parsed && typeof parsed === 'object') {
-      if (parsed.storeSettings) {
-        parsed.storeSettings = sanitizeStoreSettingsRecord(parsed.storeSettings);
+  for (const statePath of [STATE_FILE, FALLBACK_STATE_FILE]) {
+    try {
+      const raw = await fs.readFile(statePath, 'utf-8');
+      const parsed = JSON.parse(raw) as PersistedState;
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.storeSettings) {
+          parsed.storeSettings = sanitizeStoreSettingsRecord(parsed.storeSettings);
+        }
+        if (parsed.googleConfig) {
+          parsed.googleConfig = sanitizeGoogleConfigRecord(parsed.googleConfig);
+        }
+        return parsed;
       }
-      if (parsed.googleConfig) {
-        parsed.googleConfig = sanitizeGoogleConfigRecord(parsed.googleConfig);
-      }
-      return parsed;
+    } catch {
+      // try next path
     }
-    return null;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 async function writePersistedState(partial: PersistedState): Promise<PersistedState> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
   const existing = (await readPersistedState()) ?? {};
   const next: PersistedState = {
     ...existing,
@@ -84,7 +87,16 @@ async function writePersistedState(partial: PersistedState): Promise<PersistedSt
       : {}),
     updatedAt: new Date().toISOString(),
   };
-  await fs.writeFile(STATE_FILE, JSON.stringify(next, null, 2), 'utf-8');
+
+  for (const statePath of [STATE_FILE, FALLBACK_STATE_FILE]) {
+    try {
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(statePath, JSON.stringify(next, null, 2), 'utf-8');
+      break;
+    } catch {
+      // try fallback tmp path if .data is read-only
+    }
+  }
   return next;
 }
 
