@@ -24,8 +24,13 @@ import {
   Save,
   Settings,
   ShieldCheck,
+  Sparkles,
   User,
 } from 'lucide-react';
+import {
+  generateRandomHex,
+  hashPasswordScryptBrowser,
+} from '../utils/envGenerator';
 
 interface LoginViewProps {
   storeSettings: StoreBrandingSettings;
@@ -78,6 +83,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [localCloudConfigured, setLocalCloudConfigured] =
     useState(cloudConfigured);
 
+  // Zero-terminal Vercel Environment Generator state
+  const [showVercelEnvHelper, setShowVercelEnvHelper] = useState(false);
+  const [genUsername, setGenUsername] = useState('admin');
+  const [genPassword, setGenPassword] = useState('');
+  const [genError, setGenError] = useState('');
+  const [isGeneratingEnv, setIsGeneratingEnv] = useState(false);
+  const [generatedSessionSecret, setGeneratedSessionSecret] = useState('');
+  const [generatedPasswordHash, setGeneratedPasswordHash] = useState('');
+
   React.useEffect(() => {
     if (cloudConfigured) {
       setLocalCloudConfigured(true);
@@ -117,6 +131,44 @@ export const LoginView: React.FC<LoginViewProps> = ({
     );
     setAppsScriptToken(token);
     setShowToken(true);
+  };
+
+  const handleGenerateVercelEnv = async () => {
+    if (isGeneratingEnv) return;
+    const cleanUser = genUsername.trim();
+    if (!cleanUser) {
+      setGenError(
+        isId ? 'Isi username admin dulu.' : 'Please enter admin username.'
+      );
+      return;
+    }
+    if (genPassword.length < 8) {
+      setGenError(
+        isId
+          ? 'Password admin minimal 8 karakter.'
+          : 'Admin password must be at least 8 characters.'
+      );
+      return;
+    }
+
+    setGenError('');
+    setIsGeneratingEnv(true);
+    try {
+      const [secret, passHash] = await Promise.all([
+        Promise.resolve(generateRandomHex(32)),
+        hashPasswordScryptBrowser(genPassword),
+      ]);
+      setGeneratedSessionSecret(secret);
+      setGeneratedPasswordHash(passHash);
+    } catch {
+      setGenError(
+        isId
+          ? 'Gagal membuat hash password di browser.'
+          : 'Failed to generate password hash in browser.'
+      );
+    } finally {
+      setIsGeneratingEnv(false);
+    }
   };
 
   const handleSaveDatabaseConfig = async (e: React.FormEvent) => {
@@ -804,10 +856,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
       >
 
         {missingSessionSecret && (
-          <div className="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[11px] font-medium text-amber-800 leading-relaxed">
-            {isId
-              ? 'Env SESSION_SECRET (min. 32 karakter) belum diisi di Environment Variables / Secrets server (Vercel atau Cloud Run). Tambahkan juga ADMIN_USERNAME & ADMIN_PASSWORD_HASH agar login dan pengaturan database berfungsi.'
-              : 'SESSION_SECRET (min 32 chars) is missing in your server Environment Variables / Secrets (Vercel or Cloud Run). Also set ADMIN_USERNAME & ADMIN_PASSWORD_HASH so login and database settings work.'}
+          <div className="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[11px] font-medium text-amber-800 leading-relaxed space-y-1.5">
+            <div>
+              {isId
+                ? 'Env SESSION_SECRET (min. 32 karakter) belum diisi di Environment Variables / Secrets server (Vercel atau Cloud Run). Tambahkan juga ADMIN_USERNAME & ADMIN_PASSWORD_HASH agar login dan pengaturan database berfungsi.'
+                : 'SESSION_SECRET (min 32 chars) is missing in your server Environment Variables / Secrets (Vercel or Cloud Run). Also set ADMIN_USERNAME & ADMIN_PASSWORD_HASH so login and database settings work.'}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('database');
+                setShowVercelEnvHelper(true);
+              }}
+              className="inline-flex items-center gap-1 font-extrabold underline text-amber-900 cursor-pointer"
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>
+                {isId
+                  ? 'Buat SESSION_SECRET & Hash Password Otomatis (Tanpa VS Code) →'
+                  : 'Generate SESSION_SECRET & Password Hash (No Terminal) →'}
+              </span>
+            </button>
           </div>
         )}
 
@@ -1219,6 +1288,145 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 {generatedScript}
               </pre>
             )}
+
+            {/* Zero-Terminal Vercel Environment Variables Helper */}
+            <div className="rounded-xl border border-slate-200 bg-[#F8F9FA] p-3 space-y-2.5">
+              <button
+                type="button"
+                onClick={() => setShowVercelEnvHelper((prev) => !prev)}
+                className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
+              >
+                <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-[#2D3748]">
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: primaryColor }} />
+                  <span>
+                    {isId
+                      ? 'Buat Env Vercel Otomatis (Tanpa VS Code / Terminal)'
+                      : 'Generate Vercel Env Vars (No VS Code / Terminal)'}
+                  </span>
+                </span>
+                <span className="text-[11px] font-bold text-slate-500 shrink-0">
+                  {showVercelEnvHelper
+                    ? isId
+                      ? 'Tutup'
+                      : 'Hide'
+                    : isId
+                    ? 'Buka'
+                    : 'Open'}
+                </span>
+              </button>
+
+              {showVercelEnvHelper && (
+                <div className="space-y-2.5 pt-1 border-t border-slate-200/80">
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    {isId
+                      ? 'Buat SESSION_SECRET dan ADMIN_PASSWORD_HASH langsung dari browser, lalu tempel ke Vercel → Settings → Environment Variables dan Redeploy.'
+                      : 'Generate SESSION_SECRET and ADMIN_PASSWORD_HASH right in your browser, paste into Vercel → Settings → Environment Variables, then Redeploy.'}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={genUsername}
+                      onChange={(e) => setGenUsername(e.target.value)}
+                      placeholder="ADMIN_USERNAME (misal: admin)"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-[#2D3748] focus:outline-none"
+                    />
+                    <input
+                      type="password"
+                      value={genPassword}
+                      onChange={(e) => setGenPassword(e.target.value)}
+                      placeholder={
+                        isId
+                          ? 'Password admin (min. 8 karakter)'
+                          : 'Admin password (min 8 chars)'
+                      }
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-[#2D3748] focus:outline-none"
+                    />
+                  </div>
+                  {genError && (
+                    <p className="text-[11px] font-semibold text-rose-600">
+                      {genError}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isGeneratingEnv}
+                    onClick={() => void handleGenerateVercelEnv()}
+                    className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {isGeneratingEnv ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>
+                          {isId ? 'Membuat Hash...' : 'Generating Hash...'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>
+                          {isId
+                            ? 'Buat SESSION_SECRET & ADMIN_PASSWORD_HASH'
+                            : 'Generate SESSION_SECRET & ADMIN_PASSWORD_HASH'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+
+                  {generatedSessionSecret && generatedPasswordHash && (
+                    <div className="space-y-1.5 bg-white border border-slate-200 rounded-xl p-2.5">
+                      {[
+                        {
+                          key: 'envSessionSecret',
+                          label: 'SESSION_SECRET',
+                          value: generatedSessionSecret,
+                        },
+                        {
+                          key: 'envAdminUser',
+                          label: 'ADMIN_USERNAME',
+                          value: genUsername.trim(),
+                        },
+                        {
+                          key: 'envAdminHash',
+                          label: 'ADMIN_PASSWORD_HASH',
+                          value: generatedPasswordHash,
+                        },
+                      ].map((item) => (
+                        <div
+                          key={item.key}
+                          className="flex items-center justify-between gap-2 text-[11px] bg-[#F8F9FA] rounded-lg px-2.5 py-1.5"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-[#2D3748]">
+                              {item.label}
+                            </div>
+                            <div className="font-mono text-slate-500 truncate">
+                              {item.value}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText(item.key, item.value)}
+                            className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-[#2D3748] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                          >
+                            {copiedKey === item.key ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-600" />
+                                <span>{isId ? 'Tersalin' : 'Copied'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>{isId ? 'Salin' : 'Copy'}</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-col sm:flex-row gap-2 pt-1">
               <button

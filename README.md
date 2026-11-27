@@ -30,15 +30,14 @@ Tambahkan di **Vercel Project Settings → Environment Variables**:
 | `UPSTASH_REDIS_REST_TOKEN` | Disarankan | Bearer token REST Redis Upstash. |
 | `DATABASE_CONFIG_PATH` | Opsional | Path custom ke file JSON pengaturan database di luar folder aplikasi (khusus hosting server/container non-Vercel). |
 
-### 2. Membuat `ADMIN_PASSWORD_HASH`
-Jalankan perintah berikut di terminal (password minimal 8 karakter):
-
+### 2. Membuat `SESSION_SECRET` & `ADMIN_PASSWORD_HASH`
+- **Tanpa VS Code / Terminal (Langsung di Browser)**: Buka aplikasi → klik ikon **roda gigi** di pojok kanan atas halaman login → buka bagian **Buat Env Vercel Otomatis (Tanpa VS Code / Terminal)** → masukkan username & password admin → klik tombol generate, lalu salin hasilnya langsung ke Vercel Environment Variables.
+- **Via Terminal (Opsional)**:
 ```bash
 npm run hash-password -- "PasswordKuatAnda"
 ```
-
 Salin output `<salt>:<hash>` ke `ADMIN_PASSWORD_HASH` di Vercel atau `.env` lokal.  
-*(Catatan: di production Vercel, mengubah password secara permanen dilakukan dengan membuat hash baru lewat perintah di atas lalu memperbarui env `ADMIN_PASSWORD_HASH` dan redeploy.)*
+*(Catatan: di production Vercel, mengubah password secara permanen dilakukan dengan membuat hash baru lewat generator di atas lalu memperbarui env `ADMIN_PASSWORD_HASH` dan redeploy.)*
 
 ### 3. Merotasi Secret & Token
 - **Rotasi `SESSION_SECRET`**: Buat string acak baru minimal 32 karakter (`openssl rand -hex 32`), perbarui di Vercel Environment Variables, lalu redeploy. Semua sesi lama otomatis tidak valid sehingga admin harus login ulang.

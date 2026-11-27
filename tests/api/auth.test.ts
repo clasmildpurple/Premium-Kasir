@@ -12,6 +12,7 @@ import {
   verifyPasswordScrypt,
   verifySessionToken,
 } from '../../api/_lib/auth.js';
+import { hashPasswordScryptBrowser } from '../../src/utils/envGenerator.js';
 
 function mockReq(
   ip = '127.0.0.1',
@@ -33,6 +34,13 @@ describe('scrypt password hashing & verification', () => {
     expect(verifyPasswordScrypt('Rahasia123!', hash1)).toBe(true);
     expect(verifyPasswordScrypt('SalahPassword', hash1)).toBe(false);
     expect(verifyPasswordScrypt('Rahasia123!', 'malformed')).toBe(false);
+  });
+
+  it('verifies hashes generated in-browser by hashPasswordScryptBrowser without terminal', async () => {
+    const browserHash = await hashPasswordScryptBrowser('TokoSukaPOS!2026');
+    expect(browserHash.split(':')).toHaveLength(2);
+    expect(verifyPasswordScrypt('TokoSukaPOS!2026', browserHash)).toBe(true);
+    expect(verifyPasswordScrypt('PasswordLain!2026', browserHash)).toBe(false);
   });
 });
 
