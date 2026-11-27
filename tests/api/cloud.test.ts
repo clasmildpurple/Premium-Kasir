@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSessionCookieHeader,
   signSessionToken,
-} from './_lib/auth.js';
-import { resetInMemoryCloudConfigForTests } from './_lib/cloudConfig.js';
-import type { ApiRequest, ApiResponse } from './_lib/http.js';
-import cloudConfigHandler from './cloud-config.js';
-import cloudHandler from './cloud.js';
-import { generateAppsScriptCode } from '../src/data/posData.js';
+} from '../../api/_lib/auth.js';
+import { resetInMemoryCloudConfigForTests } from '../../api/_lib/cloudConfig.js';
+import type { ApiRequest, ApiResponse } from '../../api/_lib/http.js';
+import cloudConfigHandler from '../../api/cloud-config.js';
+import cloudHandler from '../../api/cloud.js';
+import { generateAppsScriptCode } from '../../src/data/posData.js';
 
 function createMockRequest(options: {
   method?: string;
@@ -204,5 +204,19 @@ describe('TAHAP 4: Apps Script token transmitted only in POST body (never URL)',
     expect(script).toContain('charCodeAt');
     expect(script).toContain('diff |=');
     expect(script).toContain('method_not_allowed');
+    expect(script).toContain('INITIAL_API_TOKEN: ""');
+
+    const withAutoToken = generateAppsScriptCode(
+      {
+        GOOGLE_SHEET_URL: '',
+        GOOGLE_DRIVE_FOLDER_URL: '',
+        SHEET_NAME_PRODUCTS: 'Products',
+        SHEET_NAME_ORDERS: 'Orders',
+        LAST_SYNCED: '',
+      },
+      { initialApiToken: 'auto-generated-token-abc' }
+    );
+    expect(withAutoToken).toContain('INITIAL_API_TOKEN: "auto-generated-token-abc"');
+    expect(withAutoToken).toContain('props.setProperty("API_TOKEN", initTok)');
   });
 });

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   hashPasswordScrypt,
   resetMemoryRateLimiterForTests,
-} from './_lib/auth.js';
-import { type ApiRequest, type ApiResponse, getClientIp } from './_lib/http.js';
-import loginHandler from './login.js';
+} from '../../api/_lib/auth.js';
+import { type ApiRequest, type ApiResponse, getClientIp } from '../../api/_lib/http.js';
+import loginHandler from '../../api/login.js';
 
 function createMockRequest(options: {
   headers?: Record<string, string>;

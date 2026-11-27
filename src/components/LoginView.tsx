@@ -224,14 +224,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  const generatedScript = generateAppsScriptCode({
-    GOOGLE_SHEET_URL: googleSheetUrl.trim() || googleConfig?.GOOGLE_SHEET_URL || '',
-    GOOGLE_DRIVE_FOLDER_URL:
-      googleDriveFolderUrl.trim() || googleConfig?.GOOGLE_DRIVE_FOLDER_URL || '',
-    SHEET_NAME_PRODUCTS: googleConfig?.SHEET_NAME_PRODUCTS || 'Products',
-    SHEET_NAME_ORDERS: googleConfig?.SHEET_NAME_ORDERS || 'Orders',
-    LAST_SYNCED: '',
-  });
+  const generatedScript = generateAppsScriptCode(
+    {
+      GOOGLE_SHEET_URL: googleSheetUrl.trim() || googleConfig?.GOOGLE_SHEET_URL || '',
+      GOOGLE_DRIVE_FOLDER_URL:
+        googleDriveFolderUrl.trim() || googleConfig?.GOOGLE_DRIVE_FOLDER_URL || '',
+      SHEET_NAME_PRODUCTS: googleConfig?.SHEET_NAME_PRODUCTS || 'Products',
+      SHEET_NAME_ORDERS: googleConfig?.SHEET_NAME_ORDERS || 'Orders',
+      LAST_SYNCED: '',
+    },
+    { initialApiToken: appsScriptToken.trim() }
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -792,13 +795,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
       </div>
 
       {/* Right Login / Database Setup Column (7 cols) */}
-      <div className="lg:col-span-7 p-6 sm:p-8 lg:p-10 xl:p-12 pt-14 sm:pt-14 flex flex-col justify-start lg:justify-center max-w-xl mx-auto w-full lg:overflow-y-auto">
+      <div
+        className={`lg:col-span-7 p-6 sm:p-8 lg:px-10 lg:pb-10 lg:pt-16 xl:px-12 xl:pb-12 xl:pt-16 pt-16 sm:pt-16 flex flex-col ${
+          activeTab === 'database' || missingSessionSecret
+            ? 'justify-start'
+            : 'justify-start lg:justify-center'
+        } max-w-xl mx-auto w-full lg:overflow-y-auto`}
+      >
 
         {missingSessionSecret && (
-          <div className="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[11px] font-medium text-amber-800">
+          <div className="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[11px] font-medium text-amber-800 leading-relaxed">
             {isId
-              ? 'Catatan Vercel: Env SESSION_SECRET belum diisi di Vercel Project Settings. Tambahkan SESSION_SECRET (min. 32 karakter) agar sesi login & database konsisten di semua serverless function.'
-              : 'Vercel note: SESSION_SECRET env var is not set. Add SESSION_SECRET (min 32 chars) in Vercel Project Settings so login sessions persist across serverless functions.'}
+              ? 'Env SESSION_SECRET (min. 32 karakter) belum diisi di Environment Variables / Secrets server (Vercel atau Cloud Run). Tambahkan juga ADMIN_USERNAME & ADMIN_PASSWORD_HASH agar login dan pengaturan database berfungsi.'
+              : 'SESSION_SECRET (min 32 chars) is missing in your server Environment Variables / Secrets (Vercel or Cloud Run). Also set ADMIN_USERNAME & ADMIN_PASSWORD_HASH so login and database settings work.'}
           </div>
         )}
 
@@ -1097,6 +1106,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   )}
                 </button>
               </div>
+              {appsScriptToken.trim() && (
+                <p className="mt-1.5 text-[11px] font-semibold text-emerald-700">
+                  {isId
+                    ? '✓ Token otomatis terpasang di dalam Code.gs di bawah — cukup Salin Code.gs lalu Deploy (tidak perlu atur Script Properties manual).'
+                    : '✓ Token automatically embedded into Code.gs below — just copy Code.gs & Deploy (no manual Script Properties needed).'}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

@@ -512,11 +512,14 @@ export const GoogleCloudIntegrationPanel: React.FC<
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const generatedScript = generateAppsScriptCode({
-    ...config,
-    GOOGLE_SHEET_URL: googleSheetUrl.trim(),
-    GOOGLE_DRIVE_FOLDER_URL: googleDriveUrl.trim(),
-  });
+  const generatedScript = generateAppsScriptCode(
+    {
+      ...config,
+      GOOGLE_SHEET_URL: googleSheetUrl.trim(),
+      GOOGLE_DRIVE_FOLDER_URL: googleDriveUrl.trim(),
+    },
+    { initialApiToken: appsScriptToken.trim() }
+  );
 
   const sampleSubTotal = 100000;
   const numericRate = Math.max(0, Math.min(100, Number(taxRate) || 0));
@@ -1311,14 +1314,12 @@ export const GoogleCloudIntegrationPanel: React.FC<
           <ol className="list-decimal list-inside space-y-1.5 text-[11px] sm:text-xs text-slate-600 leading-relaxed">
             <li>
               {isId
-                ? 'Salin Code.gs di bawah ke Google Apps Script milik Anda, lalu buka Project Settings → Script Properties dan tambahkan property '
-                : 'Copy Code.gs below into your Google Apps Script, then open Project Settings → Script Properties and add property '}
+                ? 'Klik "+ Buat Token Acak Otomatis" di bawah agar token otomatis disisipkan ke Code.gs (atau atur manual di Project Settings → Script Properties → '
+                : 'Click "+ Generate Random Token" below to auto-embed the token into Code.gs (or set manually in Project Settings → Script Properties → '}
               <code className="px-1.5 py-0.5 rounded bg-slate-200/70 font-mono text-[#2D3748] font-bold">
                 API_TOKEN
               </code>
-              {isId
-                ? ' berisi string acak panjang (minimal 32 karakter).'
-                : ' with a long random secret (at least 32 chars).'}
+              {isId ? ').' : ').'}
             </li>
             <li>
               {isId
@@ -1459,6 +1460,13 @@ export const GoogleCloudIntegrationPanel: React.FC<
               {isId ? 'Salin' : 'Copy'}
             </button>
           </div>
+          {appsScriptToken.trim() && (
+            <p className="text-[11px] font-semibold text-emerald-700">
+              {isId
+                ? '✓ Token otomatis terpasang di dalam Code.gs di bawah — cukup salin Code.gs lalu Deploy (tidak perlu isi Script Properties manual).'
+                : '✓ Token automatically embedded into Code.gs below — just copy Code.gs & Deploy (no manual Script Properties needed).'}
+            </p>
+          )}
         </div>
 
         {/* 3. Link URL Google Sheet Database (Pintasan Opsional) */}

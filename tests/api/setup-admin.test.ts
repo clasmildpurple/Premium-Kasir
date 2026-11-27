@@ -4,10 +4,10 @@ import {
   buildSessionCookieHeader,
   hashPasswordScrypt,
   signSessionToken,
-} from './_lib/auth.js';
-import type { ApiRequest, ApiResponse } from './_lib/http.js';
-import changePasswordHandler from './change-password.js';
-import setupAdminHandler from './setup-admin.js';
+} from '../../api/_lib/auth.js';
+import type { ApiRequest, ApiResponse } from '../../api/_lib/http.js';
+import changePasswordHandler from '../../api/change-password.js';
+import setupAdminHandler from '../../api/setup-admin.js';
 
 interface MockResponseResult {
   statusCode: number;

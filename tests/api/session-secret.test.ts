@@ -7,13 +7,13 @@ import {
   SessionSecretError,
   getSessionSecret,
   resetDevSecretCacheForTests,
-} from './_lib/auth.js';
-import type { ApiRequest, ApiResponse } from './_lib/http.js';
-import changePasswordHandler from './change-password.js';
-import loginHandler from './login.js';
-import logoutHandler from './logout.js';
-import sessionHandler from './session.js';
-import setupAdminHandler from './setup-admin.js';
+} from '../../api/_lib/auth.js';
+import type { ApiRequest, ApiResponse } from '../../api/_lib/http.js';
+import changePasswordHandler from '../../api/change-password.js';
+import loginHandler from '../../api/login.js';
+import logoutHandler from '../../api/logout.js';
+import sessionHandler from '../../api/session.js';
+import setupAdminHandler from '../../api/setup-admin.js';
 
 function createMockRequest(options: {
   method?: string;

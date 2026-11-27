@@ -1,0 +1,9 @@
+tests/
+**/*.test.ts
+**/*.spec.ts
+.data/
+.aistudio/
+database.config.json
+server.ts
+server.js
+scripts/

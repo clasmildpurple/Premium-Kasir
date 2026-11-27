@@ -11,7 +11,7 @@ import {
   signSessionToken,
   verifyPasswordScrypt,
   verifySessionToken,
-} from './auth';
+} from '../../api/_lib/auth.js';
 
 function mockReq(
   ip = '127.0.0.1',

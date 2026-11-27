@@ -10,7 +10,7 @@ import {
   isAllowedAppsScriptUrl,
   resetInMemoryCloudConfigForTests,
   saveExternalCloudConfig,
-} from './cloudConfig';
+} from '../../api/_lib/cloudConfig.js';
 
 describe('isAllowedAppsScriptUrl', () => {
   it('accepts valid HTTPS Google Apps Script /macros/ and Workspace /a/macros/ URLs', () => {

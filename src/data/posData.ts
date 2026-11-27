@@ -524,33 +524,47 @@ export const INITIAL_PRODUCTS: ProductItem[] = [
   },
 ];
 
-export function generateAppsScriptCode(config: PermanentGoogleConfig): string {
+export function generateAppsScriptCode(
+  config: PermanentGoogleConfig,
+  options?: { initialApiToken?: string }
+): string {
+  const initialApiToken = (options?.initialApiToken || '').trim();
   return `/**
  * ============================================================================
  * SUKAPOS — GOOGLE APPS SCRIPT BACKEND (Code.gs)
- * KEAMANAN WAJIB:
- * 1. Buka Project Settings -> Script Properties di Google Apps Script.
- * 2. Tambahkan Property: API_TOKEN = <token_rahasia_panjang_anda>
- * 3. Spreadsheet dibuat PRIVAT (hanya pemilik/Apps Script yang dapat mengakses).
- *    Hanya folder foto produk di Drive yang bersifat VIEW-only agar foto tampil.
+ * KEAMANAN & OTOMATISASI TOKEN:
+ * - Jika Anda memakai "+ Buat Token Acak" di SukaPOS sebelum menyalin Code.gs,
+ *   token sudah otomatis terpasang di INITIAL_API_TOKEN dan akan disimpan ke
+ *   Script Properties (API_TOKEN) secara otomatis pada koneksi pertama.
+ * - Anda juga tetap bisa mengubah/merotasi API_TOKEN kapan saja lewat
+ *   Project Settings -> Script Properties -> API_TOKEN.
+ * - Spreadsheet dibuat PRIVAT (hanya pemilik/Apps Script yang dapat mengakses).
  * ============================================================================
  */
 
 const PERMANENT_CONFIG = {
-  GOOGLE_SHEET_URL: "${config.GOOGLE_SHEET_URL || ''}",
-  GOOGLE_DRIVE_FOLDER_URL: "${config.GOOGLE_DRIVE_FOLDER_URL || ''}",
-  SHEET_PRODUCTS: "${config.SHEET_NAME_PRODUCTS}",
-  SHEET_ORDERS: "${config.SHEET_NAME_ORDERS}",
+  GOOGLE_SHEET_URL: ${JSON.stringify(config.GOOGLE_SHEET_URL || '')},
+  GOOGLE_DRIVE_FOLDER_URL: ${JSON.stringify(config.GOOGLE_DRIVE_FOLDER_URL || '')},
+  SHEET_PRODUCTS: ${JSON.stringify(config.SHEET_NAME_PRODUCTS)},
+  SHEET_ORDERS: ${JSON.stringify(config.SHEET_NAME_ORDERS)},
   SHEET_SETTINGS: "StoreSettings",
-  SHEET_CATEGORIES: "Categories"
+  SHEET_CATEGORIES: "Categories",
+  INITIAL_API_TOKEN: ${JSON.stringify(initialApiToken)}
 };
 
 function verifyToken(providedToken) {
   const props = PropertiesService.getScriptProperties();
-  const expectedRaw =
+  let expectedRaw =
     props.getProperty("API_TOKEN") ||
     props.getProperty("APPS_SCRIPT_TOKEN") ||
     props.getProperty("api_token");
+  if (!expectedRaw && PERMANENT_CONFIG.INITIAL_API_TOKEN) {
+    const initTok = String(PERMANENT_CONFIG.INITIAL_API_TOKEN).trim();
+    if (initTok) {
+      props.setProperty("API_TOKEN", initTok);
+      expectedRaw = initTok;
+    }
+  }
   if (!expectedRaw || !providedToken) return false;
   const expected = String(expectedRaw).trim();
   const provided = String(providedToken).trim();
