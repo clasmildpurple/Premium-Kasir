@@ -11,7 +11,10 @@ import changePasswordHandler from './api/change-password.js';
 import setupAdminHandler from './api/setup-admin.js';
 import cloudHandler from './api/cloud.js';
 import cloudConfigHandler from './api/cloud-config.js';
-import { getAuthenticatedSession } from './api/_lib/auth.js';
+import {
+  ensureSessionSecretReady,
+  getAuthenticatedSession,
+} from './api/_lib/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,6 +118,7 @@ async function startServer() {
 
   // Load persisted state across browsers / sessions (authenticated only)
   app.get('/api/state', async (req, res) => {
+    if (!ensureSessionSecretReady(res)) return;
     if (!getAuthenticatedSession(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
@@ -131,6 +135,7 @@ async function startServer() {
 
   // Save updated state to server persistence (authenticated only)
   app.post('/api/state', async (req, res) => {
+    if (!ensureSessionSecretReady(res)) return;
     if (!getAuthenticatedSession(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
@@ -178,7 +183,7 @@ async function startServer() {
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
-    app.get('/{*splat}', (_req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }

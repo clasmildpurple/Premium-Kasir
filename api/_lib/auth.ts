@@ -2,100 +2,141 @@ import crypto from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import type { IncomingMessage } from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
-import { getClientIp, parseCookies } from './http.js';
+import { type ApiResponse, getClientIp, parseCookies, sendJson } from './http.js';
 
 export const SESSION_COOKIE_NAME = 'pinkpos_session';
-export const ADMIN_RECORD_COOKIE_NAME = 'pinkpos_admin_cfg';
 export const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 hours
-export const ADMIN_RECORD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 const PRIMARY_DATA_DIR = path.resolve(process.cwd(), '.data');
 const PRIMARY_CRED_PATH = path.join(PRIMARY_DATA_DIR, 'auth.json');
-const FALLBACK_CRED_PATH = path.join(os.tmpdir(), 'pinkpos-auth.json');
 const PRIMARY_SECRET_PATH = path.join(PRIMARY_DATA_DIR, 'session-secret');
-const FALLBACK_SECRET_PATH = path.join(os.tmpdir(), 'pinkpos-session-secret');
 
-let cachedFallbackSecret: string | null = null;
+export const SESSION_SECRET_MISSING_MESSAGE = 'SESSION_SECRET belum dikonfigurasi';
 
-function loadOrCreatePersistentSecret(): string {
-  if (cachedFallbackSecret) return cachedFallbackSecret;
+export class SessionSecretError extends Error {
+  constructor(message = SESSION_SECRET_MISSING_MESSAGE) {
+    super(message);
+    this.name = 'SessionSecretError';
+  }
+}
 
-  const secretCandidates = process.env.VERCEL
-    ? [FALLBACK_SECRET_PATH]
-    : [PRIMARY_SECRET_PATH, FALLBACK_SECRET_PATH];
+export function isProduction(): boolean {
+  return Boolean(process.env.VERCEL) || process.env.NODE_ENV === 'production';
+}
 
-  for (const candidate of secretCandidates) {
-    try {
-      const existing = fsSync.readFileSync(candidate, 'utf-8').trim();
-      if (existing.length >= 32) {
-        cachedFallbackSecret = existing;
-        return existing;
-      }
-    } catch {
-      // ignore if not found
+export function isValidSetupToken(req: IncomingMessage): boolean {
+  const expected = process.env.SETUP_TOKEN?.trim() || '';
+  if (!expected) return false;
+  const rawHeader = req.headers['x-setup-token'];
+  const provided = (
+    Array.isArray(rawHeader) ? rawHeader[0] : rawHeader || ''
+  ).trim();
+  if (!provided) return false;
+
+  const expectedBuf = Buffer.from(expected, 'utf-8');
+  const providedBuf = Buffer.from(provided, 'utf-8');
+  if (expectedBuf.length !== providedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
+}
+
+let cachedDevFallbackSecret: string | null = null;
+
+function loadOrCreateDevSecret(): string {
+  if (isProduction()) {
+    throw new SessionSecretError();
+  }
+  if (cachedDevFallbackSecret) return cachedDevFallbackSecret;
+
+  try {
+    const existing = fsSync.readFileSync(PRIMARY_SECRET_PATH, 'utf-8').trim();
+    if (existing.length >= 32) {
+      cachedDevFallbackSecret = existing;
+      return existing;
     }
+  } catch {
+    // ignore if not found yet
   }
 
   const generated = crypto.randomBytes(32).toString('hex');
-  cachedFallbackSecret = generated;
+  cachedDevFallbackSecret = generated;
 
-  for (const candidate of secretCandidates) {
-    try {
-      fsSync.mkdirSync(path.dirname(candidate), { recursive: true });
-      fsSync.writeFileSync(candidate, generated, { encoding: 'utf-8', mode: 0o600 });
-      break;
-    } catch {
-      // try next candidate
-    }
+  try {
+    fsSync.mkdirSync(path.dirname(PRIMARY_SECRET_PATH), { recursive: true });
+    fsSync.writeFileSync(PRIMARY_SECRET_PATH, generated, {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+  } catch {
+    // keep in-memory dev secret if workspace .data directory is read-only
   }
 
   return generated;
 }
 
-export function getSessionSecret(): string {
-  const envSecret = process.env.SESSION_SECRET?.trim();
-  if (envSecret && envSecret.length >= 16) {
-    return envSecret;
-  }
-  return loadOrCreatePersistentSecret();
+export function isSessionSecretConfigured(): boolean {
+  const envSecret = process.env.SESSION_SECRET?.trim() || '';
+  return envSecret.length >= 32;
 }
 
-// Runtime credential override store (for password changes / first-run setup when env is unset)
+export function getSessionSecret(): string {
+  const envSecret = process.env.SESSION_SECRET?.trim() || '';
+  if (envSecret.length >= 32) {
+    return envSecret;
+  }
+  if (isProduction()) {
+    throw new SessionSecretError();
+  }
+  return loadOrCreateDevSecret();
+}
+
+export function ensureSessionSecretReady(res: ApiResponse): boolean {
+  try {
+    getSessionSecret();
+    return true;
+  } catch (err) {
+    if (err instanceof SessionSecretError) {
+      sendJson(res, 500, {
+        error: SESSION_SECRET_MISSING_MESSAGE,
+        missingSessionSecret: true,
+      });
+      return false;
+    }
+    throw err;
+  }
+}
+
+export function resetDevSecretCacheForTests(): void {
+  cachedDevFallbackSecret = null;
+}
+
+// Runtime credential override store (local development ONLY when env is unset)
 interface StoredCredentials {
   username: string;
   passwordHash: string; // format: "<hex-salt>:<hex-derived-key>"
   updatedAt: string;
 }
 
-let inMemoryCredentials: StoredCredentials | null = null;
-
-function getCredentialReadPaths(): string[] {
-  return process.env.VERCEL
-    ? [FALLBACK_CRED_PATH]
-    : [PRIMARY_CRED_PATH, FALLBACK_CRED_PATH];
-}
-
 async function readRuntimeCredentials(): Promise<StoredCredentials | null> {
-  if (inMemoryCredentials) return inMemoryCredentials;
-  for (const credPath of getCredentialReadPaths()) {
-    try {
-      const raw = await fs.readFile(credPath, 'utf-8');
-      const parsed = JSON.parse(raw) as StoredCredentials;
-      if (
-        parsed &&
-        typeof parsed.username === 'string' &&
-        typeof parsed.passwordHash === 'string' &&
-        parsed.username.trim() &&
-        parsed.passwordHash.includes(':')
-      ) {
-        inMemoryCredentials = parsed;
-        return parsed;
-      }
-    } catch {
-      // try next path
+  if (isProduction()) {
+    return null;
+  }
+  try {
+    const raw = await fs.readFile(PRIMARY_CRED_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as StoredCredentials;
+    if (
+      parsed &&
+      typeof parsed.username === 'string' &&
+      typeof parsed.passwordHash === 'string' &&
+      parsed.username.trim() &&
+      parsed.passwordHash.includes(':')
+    ) {
+      return parsed;
     }
+  } catch {
+    // ignore if not present
   }
   return null;
 }
@@ -103,22 +144,26 @@ async function readRuntimeCredentials(): Promise<StoredCredentials | null> {
 export async function saveRuntimeCredentials(
   username: string,
   passwordHash: string
-): Promise<void> {
+): Promise<boolean> {
+  if (isProduction()) {
+    return false;
+  }
   const record: StoredCredentials = {
     username: username.trim(),
     passwordHash,
     updatedAt: new Date().toISOString(),
   };
-  inMemoryCredentials = record;
 
-  for (const credPath of getCredentialReadPaths()) {
-    try {
-      await fs.mkdir(path.dirname(credPath), { recursive: true });
-      await fs.writeFile(credPath, JSON.stringify(record, null, 2), 'utf-8');
-      return;
-    } catch {
-      // try fallback path (e.g. os.tmpdir()) if .data is read-only
-    }
+  try {
+    await fs.mkdir(path.dirname(PRIMARY_CRED_PATH), { recursive: true });
+    await fs.writeFile(
+      PRIMARY_CRED_PATH,
+      JSON.stringify(record, null, 2),
+      { encoding: 'utf-8', mode: 0o600 }
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -157,12 +202,6 @@ export interface SessionPayload {
   sub: string;
   iat: number;
   exp: number;
-}
-
-interface AdminRecordPayload {
-  u: string;
-  h: string;
-  iat: number;
 }
 
 function toBase64Url(input: Buffer | string): string {
@@ -208,7 +247,10 @@ function verifySignedPayload<T>(token: string): T | null {
     if (!crypto.timingSafeEqual(expectedSig, actualSig)) return null;
 
     return JSON.parse(fromBase64Url(payloadB64).toString('utf-8')) as T;
-  } catch {
+  } catch (err) {
+    if (err instanceof SessionSecretError) {
+      throw err;
+    }
     return null;
   }
 }
@@ -246,39 +288,31 @@ export function getAuthenticatedSession(
   return verifySessionToken(token);
 }
 
-function readAdminRecordFromCookie(
-  req: IncomingMessage
-): StoredCredentials | null {
-  const cookies = parseCookies(req);
-  const rawToken = cookies[ADMIN_RECORD_COOKIE_NAME];
-  if (!rawToken) return null;
-  const payload = verifySignedPayload<AdminRecordPayload>(rawToken);
-  if (
-    !payload ||
-    typeof payload.u !== 'string' ||
-    typeof payload.h !== 'string' ||
-    !payload.u.trim() ||
-    !payload.h.includes(':')
-  ) {
-    return null;
-  }
-  return {
-    username: payload.u.trim(),
-    passwordHash: payload.h,
-    updatedAt: new Date((payload.iat || 0) * 1000).toISOString(),
-  };
-}
-
-export async function getActiveAdminCredentials(req?: IncomingMessage): Promise<{
+export async function getActiveAdminCredentials(): Promise<{
   username: string;
   passwordHash: string;
   source: 'env' | 'runtime' | 'unset';
 }> {
-  const runtimeCreds = await readRuntimeCredentials();
   const envHash = process.env.ADMIN_PASSWORD_HASH?.trim() || '';
   const envUser = process.env.ADMIN_USERNAME?.trim() || '';
 
-  // If runtime setup/password change happened on this server, honor it first
+  if (isProduction()) {
+    if (envUser && envHash) {
+      return {
+        username: envUser,
+        passwordHash: envHash,
+        source: 'env',
+      };
+    }
+    return {
+      username: envUser,
+      passwordHash: '',
+      source: 'unset',
+    };
+  }
+
+  // Local development: allow runtime credential file override (.data/auth.json), or fallback to env
+  const runtimeCreds = await readRuntimeCredentials();
   if (runtimeCreds) {
     return {
       username: runtimeCreds.username,
@@ -293,19 +327,6 @@ export async function getActiveAdminCredentials(req?: IncomingMessage): Promise<
       passwordHash: envHash,
       source: 'env',
     };
-  }
-
-  // Fallback for stateless serverless or ephemeral containers: signed HttpOnly admin record cookie
-  if (req) {
-    const cookieCreds = readAdminRecordFromCookie(req);
-    if (cookieCreds) {
-      inMemoryCredentials = cookieCreds;
-      return {
-        username: cookieCreds.username,
-        passwordHash: cookieCreds.passwordHash,
-        source: 'runtime',
-      };
-    }
   }
 
   return {
@@ -367,27 +388,8 @@ export function buildSessionCookieHeader(
   return buildCookieHeader(req, SESSION_COOKIE_NAME, token, maxAgeSeconds);
 }
 
-export function buildAdminRecordCookieHeader(
-  req: IncomingMessage,
-  username: string,
-  passwordHash: string
-): string {
-  const payload: AdminRecordPayload = {
-    u: username.trim(),
-    h: passwordHash,
-    iat: Math.floor(Date.now() / 1000),
-  };
-  const signed = signSignedPayload(payload);
-  return buildCookieHeader(
-    req,
-    ADMIN_RECORD_COOKIE_NAME,
-    signed,
-    ADMIN_RECORD_TTL_SECONDS
-  );
-}
-
 // ============================================================================
-// LOGIN RATE LIMITER (Max 5 failed attempts -> lock for 5 minutes)
+// LOGIN RATE LIMITER (Dual lock: per IP AND per username, 5 failed / 5 min)
 // ============================================================================
 interface RateLimitEntry {
   failures: number;
@@ -396,76 +398,223 @@ interface RateLimitEntry {
 }
 
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+const LOCKOUT_SECONDS = 5 * 60;
+const LOCKOUT_MS = LOCKOUT_SECONDS * 1000;
 const loginAttemptsMap = new Map<string, RateLimitEntry>();
 
-function getRateLimitKey(req: IncomingMessage, username: string): string {
-  const ip = getClientIp(req);
-  return `${ip}::${username.trim().toLowerCase()}`;
+function getRateLimitKeys(req: IncomingMessage, username: string): string[] {
+  const ip = getClientIp(req) || 'unknown';
+  const normalizedUser = username.trim().toLowerCase();
+  const keys = [`pinkpos:rl:ip:${ip}`];
+  if (normalizedUser) {
+    keys.push(`pinkpos:rl:user:${normalizedUser}`);
+  }
+  return keys;
 }
 
-export function checkLoginRateLimit(
-  req: IncomingMessage,
-  username: string
-): { allowed: boolean; retryAfterSeconds: number } {
-  const key = getRateLimitKey(req, username);
-  const now = Date.now();
-  const entry = loginAttemptsMap.get(key);
-  if (!entry) return { allowed: true, retryAfterSeconds: 0 };
-
-  if (entry.lockedUntil > now) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.ceil((entry.lockedUntil - now) / 1000),
-    };
+function getUpstashConfig(): { url: string; token: string } | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL?.trim().replace(/\/+$/, '') || '';
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim() || '';
+  if (url && token) {
+    return { url, token };
   }
+  return null;
+}
 
-  // Expired lockout resets counter
-  if (entry.lockedUntil > 0 && entry.lockedUntil <= now) {
-    loginAttemptsMap.delete(key);
+async function runUpstashPipeline(
+  cfg: { url: string; token: string },
+  commands: Array<Array<string | number>>
+): Promise<Array<{ result?: unknown; error?: string }> | null> {
+  try {
+    const res = await fetch(`${cfg.url}/pipeline`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${cfg.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(commands),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Array<{ result?: unknown; error?: string }>;
+    return Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function checkMemoryRateLimitKeys(keys: string[]): {
+  allowed: boolean;
+  retryAfterSeconds: number;
+} {
+  const now = Date.now();
+  let maxRetry = 0;
+  for (const key of keys) {
+    const entry = loginAttemptsMap.get(key);
+    if (!entry) continue;
+    if (entry.lockedUntil > now) {
+      maxRetry = Math.max(maxRetry, Math.ceil((entry.lockedUntil - now) / 1000));
+    } else if (entry.lockedUntil > 0 && entry.lockedUntil <= now) {
+      loginAttemptsMap.delete(key);
+    }
+  }
+  if (maxRetry > 0) {
+    return { allowed: false, retryAfterSeconds: maxRetry };
   }
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
-export function recordLoginFailure(
-  req: IncomingMessage,
-  username: string
-): { locked: boolean; remainingAttempts: number; retryAfterSeconds: number } {
-  const key = getRateLimitKey(req, username);
+function recordMemoryRateLimitKeys(keys: string[]): {
+  locked: boolean;
+  remainingAttempts: number;
+  retryAfterSeconds: number;
+} {
   const now = Date.now();
-  const prev = loginAttemptsMap.get(key);
-  const failures =
-    prev && now - prev.lastAttemptAt < LOCKOUT_MS ? prev.failures + 1 : 1;
+  let maxFailures = 0;
 
-  if (failures >= MAX_FAILED_ATTEMPTS) {
-    loginAttemptsMap.set(key, {
-      failures,
-      lockedUntil: now + LOCKOUT_MS,
-      lastAttemptAt: now,
-    });
+  for (const key of keys) {
+    const prev = loginAttemptsMap.get(key);
+    const failures =
+      prev && now - prev.lastAttemptAt < LOCKOUT_MS ? prev.failures + 1 : 1;
+    maxFailures = Math.max(maxFailures, failures);
+
+    if (failures >= MAX_FAILED_ATTEMPTS) {
+      loginAttemptsMap.set(key, {
+        failures,
+        lockedUntil: now + LOCKOUT_MS,
+        lastAttemptAt: now,
+      });
+    } else {
+      loginAttemptsMap.set(key, {
+        failures,
+        lockedUntil: 0,
+        lastAttemptAt: now,
+      });
+    }
+  }
+
+  if (maxFailures >= MAX_FAILED_ATTEMPTS) {
     return {
       locked: true,
       remainingAttempts: 0,
-      retryAfterSeconds: Math.ceil(LOCKOUT_MS / 1000),
+      retryAfterSeconds: LOCKOUT_SECONDS,
     };
   }
 
-  loginAttemptsMap.set(key, {
-    failures,
-    lockedUntil: 0,
-    lastAttemptAt: now,
-  });
   return {
     locked: false,
-    remainingAttempts: MAX_FAILED_ATTEMPTS - failures,
+    remainingAttempts: MAX_FAILED_ATTEMPTS - maxFailures,
     retryAfterSeconds: 0,
   };
 }
 
-export function clearLoginFailures(
+export async function checkLoginRateLimit(
   req: IncomingMessage,
   username: string
-): void {
-  const key = getRateLimitKey(req, username);
-  loginAttemptsMap.delete(key);
+): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
+  const keys = getRateLimitKeys(req, username);
+  const upstash = getUpstashConfig();
+
+  if (upstash) {
+    const commands: Array<Array<string | number>> = [];
+    for (const key of keys) {
+      commands.push(['GET', key], ['TTL', key]);
+    }
+    const results = await runUpstashPipeline(upstash, commands);
+    if (results && results.length === keys.length * 2) {
+      let maxRetry = 0;
+      for (let i = 0; i < keys.length; i++) {
+        const count = Number(results[i * 2]?.result || 0);
+        const ttl = Number(results[i * 2 + 1]?.result || 0);
+        if (count >= MAX_FAILED_ATTEMPTS) {
+          maxRetry = Math.max(maxRetry, ttl > 0 ? ttl : LOCKOUT_SECONDS);
+        }
+      }
+      if (maxRetry > 0) {
+        return { allowed: false, retryAfterSeconds: maxRetry };
+      }
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+  }
+
+  if (isProduction()) {
+    console.warn(
+      '[auth] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN belum diset; rate limit memakai fallback in-memory per instance.'
+    );
+  }
+  return checkMemoryRateLimitKeys(keys);
+}
+
+export async function recordLoginFailure(
+  req: IncomingMessage,
+  username: string
+): Promise<{ locked: boolean; remainingAttempts: number; retryAfterSeconds: number }> {
+  const keys = getRateLimitKeys(req, username);
+  const upstash = getUpstashConfig();
+
+  if (upstash) {
+    const commands: Array<Array<string | number>> = [];
+    for (const key of keys) {
+      commands.push(['INCR', key], ['TTL', key]);
+    }
+    const results = await runUpstashPipeline(upstash, commands);
+    if (results && results.length === keys.length * 2) {
+      const expireCommands: Array<Array<string | number>> = [];
+      let maxFailures = 0;
+      let maxTtl = LOCKOUT_SECONDS;
+
+      for (let i = 0; i < keys.length; i++) {
+        const count = Number(results[i * 2]?.result || 1);
+        const ttl = Number(results[i * 2 + 1]?.result ?? -1);
+        maxFailures = Math.max(maxFailures, count);
+        if (ttl < 0 || count === 1) {
+          expireCommands.push(['EXPIRE', keys[i], LOCKOUT_SECONDS]);
+        } else if (ttl > 0) {
+          maxTtl = Math.max(maxTtl, ttl);
+        }
+      }
+
+      if (expireCommands.length > 0) {
+        await runUpstashPipeline(upstash, expireCommands);
+      }
+
+      if (maxFailures >= MAX_FAILED_ATTEMPTS) {
+        return {
+          locked: true,
+          remainingAttempts: 0,
+          retryAfterSeconds: maxTtl > 0 ? maxTtl : LOCKOUT_SECONDS,
+        };
+      }
+
+      return {
+        locked: false,
+        remainingAttempts: Math.max(0, MAX_FAILED_ATTEMPTS - maxFailures),
+        retryAfterSeconds: 0,
+      };
+    }
+  }
+
+  return recordMemoryRateLimitKeys(keys);
+}
+
+export async function clearLoginFailures(
+  req: IncomingMessage,
+  username: string
+): Promise<void> {
+  const keys = getRateLimitKeys(req, username);
+  for (const key of keys) {
+    loginAttemptsMap.delete(key);
+  }
+
+  const upstash = getUpstashConfig();
+  if (upstash && keys.length > 0) {
+    await runUpstashPipeline(upstash, [['DEL', ...keys]]);
+  }
+}
+
+export async function delayFailedLogin(ms = 300): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function resetMemoryRateLimiterForTests(): void {
+  loginAttemptsMap.clear();
 }

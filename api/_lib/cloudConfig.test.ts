@@ -177,4 +177,15 @@ describe('external cloud config storage', () => {
     );
     expect(loaded.appsScriptToken).toBe('cookie-secret-token-9876543210');
   });
+
+  it('returns source unset cleanly when database.config.json and env vars do not exist', async () => {
+    process.env.DATABASE_CONFIG_PATH = path.join(
+      tempDir,
+      'does-not-exist.config.json'
+    );
+    const loaded = await getServerCloudConfig();
+    expect(loaded.source).toBe('unset');
+    expect(loaded.appsScriptUrl).toBe('');
+    expect(loaded.appsScriptToken).toBe('');
+  });
 });

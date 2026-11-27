@@ -57,18 +57,15 @@ function getTmpConfigPath(): string {
 }
 
 function getReadCandidates(): string[] {
-  const candidates: string[] = [];
   const customPath = process.env.DATABASE_CONFIG_PATH?.trim();
   if (customPath) {
-    candidates.push(path.resolve(customPath));
+    return [path.resolve(customPath)];
   }
-  // External file one directory above the app folder (if user placed it outside folder)
-  candidates.push(getParentExternalConfigPath());
-  // Temp writable override (used on Vercel or when app folder is read-only / root-owned)
-  candidates.push(getTmpConfigPath());
-  // Root config file outside src/ and dist/
-  candidates.push(getDefaultRootConfigPath());
-  return candidates;
+  return [
+    getParentExternalConfigPath(),
+    getTmpConfigPath(),
+    getDefaultRootConfigPath(),
+  ];
 }
 
 async function resolveWritableConfigPath(): Promise<string> {
@@ -170,7 +167,10 @@ function decryptCloudConfigPayload(raw: string): ExternalCloudConfig | null {
       updatedAt:
         typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
     };
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === 'SessionSecretError') {
+      throw err;
+    }
     return null;
   }
 }

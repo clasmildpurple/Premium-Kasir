@@ -1,9 +1,10 @@
 import {
-  buildAdminRecordCookieHeader,
   buildSessionCookieHeader,
+  ensureSessionSecretReady,
   getActiveAdminCredentials,
   getAuthenticatedSession,
   hashPasswordScrypt,
+  isProduction,
   saveRuntimeCredentials,
   signSessionToken,
   verifyPasswordScrypt,
@@ -27,6 +28,10 @@ export default async function handler(
 
   if (!isValidCsrfOrigin(req)) {
     sendJson(res, 403, { error: 'Invalid request origin' });
+    return;
+  }
+
+  if (!ensureSessionSecretReady(res)) {
     return;
   }
 
@@ -70,7 +75,7 @@ export default async function handler(
     return;
   }
 
-  const creds = await getActiveAdminCredentials(req);
+  const creds = await getActiveAdminCredentials();
   if (creds.source === 'unset' || !creds.passwordHash) {
     sendJson(res, 503, { error: 'Akun admin belum dikonfigurasi.' });
     return;
@@ -81,16 +86,21 @@ export default async function handler(
     return;
   }
 
+  if (isProduction()) {
+    sendJson(res, 400, {
+      ok: false,
+      requiresEnvUpdate: true,
+      error:
+        'Di production (Vercel), perubahan password permanen perlu memperbarui environment variable ADMIN_PASSWORD_HASH. Jalankan: npm run hash-password -- "<password-baru>" lalu perbarui ADMIN_PASSWORD_HASH di Vercel Settings → Environment Variables.',
+    });
+    return;
+  }
+
   const nextHash = hashPasswordScrypt(newPassword);
   await saveRuntimeCredentials(creds.username, nextHash);
 
   const refreshedToken = signSessionToken(creds.username);
   const cookieHeader = buildSessionCookieHeader(req, refreshedToken);
-  const adminRecordCookie = buildAdminRecordCookieHeader(
-    req,
-    creds.username,
-    nextHash
-  );
 
   sendJson(
     res,
@@ -99,6 +109,6 @@ export default async function handler(
       ok: true,
       message: 'Password berhasil diperbarui dengan aman.',
     },
-    { 'Set-Cookie': [cookieHeader, adminRecordCookie] }
+    { 'Set-Cookie': cookieHeader }
   );
 }

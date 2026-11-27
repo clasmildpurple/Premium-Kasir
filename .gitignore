@@ -1,0 +1,10 @@
+node_modules/
+dist/
+server.js
+.env
+.env.*
+!.env.example
+.data/
+.aistudio/
+database.config.json
+*.log

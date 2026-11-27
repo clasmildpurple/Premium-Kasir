@@ -527,7 +527,7 @@ export const INITIAL_PRODUCTS: ProductItem[] = [
 export function generateAppsScriptCode(config: PermanentGoogleConfig): string {
   return `/**
  * ============================================================================
- * PINKPOS — GOOGLE APPS SCRIPT BACKEND (Code.gs)
+ * SUKAPOS — GOOGLE APPS SCRIPT BACKEND (Code.gs)
  * KEAMANAN WAJIB:
  * 1. Buka Project Settings -> Script Properties di Google Apps Script.
  * 2. Tambahkan Property: API_TOKEN = <token_rahasia_panjang_anda>
@@ -546,9 +546,19 @@ const PERMANENT_CONFIG = {
 };
 
 function verifyToken(providedToken) {
-  const expectedToken = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
-  if (!expectedToken || !providedToken) return false;
-  return String(providedToken).trim() === String(expectedToken).trim();
+  const expectedRaw = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
+  if (!expectedRaw || !providedToken) return false;
+  const expected = String(expectedRaw).trim();
+  const provided = String(providedToken).trim();
+  if (!expected || !provided) return false;
+  const maxLen = Math.max(expected.length, provided.length);
+  let diff = expected.length ^ provided.length;
+  for (let i = 0; i < maxLen; i++) {
+    const a = i < expected.length ? expected.charCodeAt(i) : 0;
+    const b = i < provided.length ? provided.charCodeAt(i) : 0;
+    diff |= a ^ b;
+  }
+  return diff === 0;
 }
 
 function extractIdFromUrl(url) {
@@ -561,9 +571,9 @@ function extractIdFromUrl(url) {
  * Otomatis membuka Spreadsheet dari link, atau membuat Spreadsheet baru yang PRIVAT
  * jika belum ada, lalu menyimpan ID-nya di ScriptProperties.
  */
-function getOrCreateSpreadsheet() {
+function getOrCreateSpreadsheet(overrideSheetUrl) {
   const props = PropertiesService.getScriptProperties();
-  const configuredId = extractIdFromUrl(PERMANENT_CONFIG.GOOGLE_SHEET_URL);
+  const configuredId = extractIdFromUrl(overrideSheetUrl || PERMANENT_CONFIG.GOOGLE_SHEET_URL);
 
   if (configuredId) {
     try {
@@ -587,13 +597,13 @@ function getOrCreateSpreadsheet() {
   } catch (e) {}
 
   // Otomatis buat Google Spreadsheet baru yang tetap PRIVAT (hanya pemilik)
-  const created = SpreadsheetApp.create("PinkPOS — Database Privat");
+  const created = SpreadsheetApp.create("SukaPOS — Database Privat");
   props.setProperty("AUTO_CREATED_SHEET_ID", created.getId());
   return created;
 }
 
-function getDriveFolder() {
-  const folderId = extractIdFromUrl(PERMANENT_CONFIG.GOOGLE_DRIVE_FOLDER_URL);
+function getDriveFolder(overrideDriveUrl) {
+  const folderId = extractIdFromUrl(overrideDriveUrl || PERMANENT_CONFIG.GOOGLE_DRIVE_FOLDER_URL);
   if (folderId && folderId.indexOf("Permanent_ID") === -1) {
     try {
       return DriveApp.getFolderById(folderId);
@@ -606,7 +616,7 @@ function getDriveFolder() {
       return DriveApp.getFolderById(savedFolderId);
     } catch (e) {}
   }
-  const folder = DriveApp.createFolder("PinkPOS_Product_Images");
+  const folder = DriveApp.createFolder("SukaPOS_Product_Images");
   folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   props.setProperty("AUTO_CREATED_FOLDER_ID", folder.getId());
   return folder;
@@ -629,6 +639,8 @@ function ensureSheets(ss) {
   let prodSheet = ss.getSheetByName(PERMANENT_CONFIG.SHEET_PRODUCTS);
   if (!prodSheet) {
     prodSheet = ss.insertSheet(PERMANENT_CONFIG.SHEET_PRODUCTS);
+  }
+  if (prodSheet.getLastRow() === 0) {
     styleSheetHeader(prodSheet, [
       "id", "name", "barcode", "price", "categories",
       "isNew", "popularity", "imageUrl", "driveFileId",
@@ -639,6 +651,8 @@ function ensureSheets(ss) {
   let ordSheet = ss.getSheetByName(PERMANENT_CONFIG.SHEET_ORDERS);
   if (!ordSheet) {
     ordSheet = ss.insertSheet(PERMANENT_CONFIG.SHEET_ORDERS);
+  }
+  if (ordSheet.getLastRow() === 0) {
     styleSheetHeader(ordSheet, [
       "orderId", "createdAt", "itemsJson", "subTotal",
       "taxPbf", "total", "customerName", "paymentMethod", "cashierName"
@@ -648,26 +662,40 @@ function ensureSheets(ss) {
   let catSheet = ss.getSheetByName(PERMANENT_CONFIG.SHEET_CATEGORIES);
   if (!catSheet) {
     catSheet = ss.insertSheet(PERMANENT_CONFIG.SHEET_CATEGORIES);
+  }
+  if (catSheet.getLastRow() === 0) {
     styleSheetHeader(catSheet, ["id", "name", "nameEn"]);
   }
 
   let setSheet = ss.getSheetByName(PERMANENT_CONFIG.SHEET_SETTINGS);
   if (!setSheet) {
     setSheet = ss.insertSheet(PERMANENT_CONFIG.SHEET_SETTINGS);
+  }
+  if (setSheet.getLastRow() === 0) {
     styleSheetHeader(setSheet, ["key", "valueJson", "updatedAt"]);
   }
+
+  try {
+    const defaultSheet = ss.getSheetByName("Sheet1");
+    if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
+      ss.deleteSheet(defaultSheet);
+    }
+  } catch (e) {}
 
   return { prodSheet, ordSheet, catSheet, setSheet };
 }
 
-function doGet(e) {
-  const token = e && e.parameter ? e.parameter.token : "";
-  if (!verifyToken(token)) {
-    return jsonResponse({ status: "error", error: "unauthorized" });
-  }
+function doGet() {
+  return jsonResponse({
+    status: "error",
+    error: "method_not_allowed",
+    message: "Gunakan POST dengan body JSON. Token tidak boleh dikirim melalui parameter URL."
+  });
+}
 
-  const ss = getOrCreateSpreadsheet();
-  const { prodSheet, ordSheet, catSheet, setSheet } = ensureSheets(ss);
+function handleGetAllData(ss, prodSheet, ordSheet, catSheet, setSheet) {
+  try {
+    SpreadsheetApp.flush();
 
   const prodRows = prodSheet.getDataRange().getValues();
   const prodHeaders = (prodRows.shift() || []).map(h => String(h || "").trim());
@@ -776,16 +804,23 @@ function doGet(e) {
     storeSettings = Object.assign({}, storeSettings || {}, flatOverrides);
   }
 
-  return jsonResponse({
-    status: "ok",
-    initialized: true,
-    sheetUrl: ss.getUrl(),
-    serverTime: new Date().toISOString(),
-    products,
-    orders,
-    storeSettings,
-    categories
-  });
+    return jsonResponse({
+      status: "ok",
+      initialized: true,
+      sheetUrl: ss.getUrl(),
+      serverTime: new Date().toISOString(),
+      products,
+      orders,
+      storeSettings,
+      categories
+    });
+  } catch (err) {
+    return jsonResponse({
+      status: "error",
+      error: err.toString(),
+      message: err.toString()
+    });
+  }
 }
 
 function writeProductsTable(prodSheet, productsList) {
@@ -837,8 +872,13 @@ function doPost(e) {
     lockAcquired = true;
 
     const action = payload.action;
-    const ss = getOrCreateSpreadsheet();
+    const ss = getOrCreateSpreadsheet(payload.googleSheetUrl || payload.sheetUrl || "");
     const { prodSheet, ordSheet, catSheet, setSheet } = ensureSheets(ss);
+
+    // Baca seluruh data via POST agar API_TOKEN tidak pernah berada di URL query string
+    if (action === "getAllData") {
+      return handleGetAllData(ss, prodSheet, ordSheet, catSheet, setSheet);
+    }
 
     // Bulk Sync All Data to Sheets (hanya untuk sinkronisasi awal / manual)
     if (action === "syncAll") {
@@ -883,7 +923,7 @@ function doPost(e) {
       let driveFileId = payload.driveFileId || "";
 
       if (payload.base64Data && payload.fileName) {
-        const folder = getDriveFolder();
+        const folder = getDriveFolder(payload.googleDriveFolderUrl || "");
         const contentType = payload.mimeType || "image/png";
         const bytes = Utilities.base64Decode(payload.base64Data.split(",").pop());
         const blob = Utilities.newBlob(bytes, contentType, payload.fileName);
@@ -1004,7 +1044,7 @@ function doPost(e) {
     if (action === "saveStoreSettings") {
       const settingsObj = Object.assign({}, payload.settings || {});
       if (payload.logoBase64 && payload.logoFileName) {
-        const folder = getDriveFolder();
+        const folder = getDriveFolder(payload.googleDriveFolderUrl || "");
         const contentType = payload.logoMimeType || "image/png";
         const bytes = Utilities.base64Decode(payload.logoBase64.split(",").pop());
         const blob = Utilities.newBlob(bytes, contentType, payload.logoFileName);

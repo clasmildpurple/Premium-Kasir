@@ -1,0 +1,7 @@
+{
+  "_comment": "Salin menjadi database.config.json (atau ../pinkpos-database.config.json) jika ingin mengisi konfigurasi secara manual di server non-Vercel. Jangan commit file database.config.json asli yang berisi token.",
+  "appsScriptUrl": "",
+  "appsScriptToken": "",
+  "googleSheetUrl": "",
+  "googleDriveFolderUrl": ""
+}

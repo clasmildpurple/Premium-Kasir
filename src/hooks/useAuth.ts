@@ -13,6 +13,10 @@ export function useAuth(onStorageError?: (message: string) => void) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingSession, setIsCheckingSession] = useState<boolean>(true);
   const [needsAdminSetup, setNeedsAdminSetup] = useState<boolean>(false);
+  const [cloudConfiguredOnServer, setCloudConfiguredOnServer] =
+    useState<boolean>(false);
+  const [missingSessionSecret, setMissingSessionSecret] =
+    useState<boolean>(false);
   const [cashierName, setCashierName] = useState<string>('Admin Kasir');
 
   useEffect(() => {
@@ -56,15 +60,23 @@ export function useAuth(onStorageError?: (message: string) => void) {
         const res = await fetch('/api/session', {
           method: 'GET',
           credentials: 'include',
+          cache: 'no-store',
         });
-        if (res.ok && !cancelled) {
-          const data = (await res.json()) as {
-            authenticated?: boolean;
-            username?: string;
-            needsSetup?: boolean;
-          };
-          setNeedsAdminSetup(Boolean(data.needsSetup));
-          if (data.authenticated) {
+        const data = (await res.json().catch(() => null)) as {
+          authenticated?: boolean;
+          username?: string;
+          needsSetup?: boolean;
+          cloudConfigured?: boolean;
+          missingSessionSecret?: boolean;
+        } | null;
+
+        if (!cancelled) {
+          if (data) {
+            setNeedsAdminSetup(Boolean(data.needsSetup));
+            setCloudConfiguredOnServer(Boolean(data.cloudConfigured));
+            setMissingSessionSecret(Boolean(data.missingSessionSecret));
+          }
+          if (res.ok && data?.authenticated) {
             const rawUser = data.username || 'Admin Kasir';
             const displayUser = rawUser.includes('@')
               ? rawUser.split('@')[0]
@@ -112,6 +124,9 @@ export function useAuth(onStorageError?: (message: string) => void) {
     isAuthenticated,
     isCheckingSession,
     needsAdminSetup,
+    cloudConfiguredOnServer,
+    setCloudConfiguredOnServer,
+    missingSessionSecret,
     cashierName,
     showOpeningAnim,
     setShowOpeningAnim,

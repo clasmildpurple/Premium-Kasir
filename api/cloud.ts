@@ -1,4 +1,7 @@
-import { getAuthenticatedSession } from './_lib/auth.js';
+import {
+  ensureSessionSecretReady,
+  getAuthenticatedSession,
+} from './_lib/auth.js';
 import {
   getServerCloudConfig,
   isAllowedAppsScriptUrl,
@@ -25,6 +28,10 @@ export default async function handler(
   req: ApiRequest,
   res: ApiResponse
 ): Promise<void> {
+  if (!ensureSessionSecretReady(res)) {
+    return;
+  }
+
   const session = getAuthenticatedSession(req);
   if (!session) {
     sendJson(res, 401, { error: 'Unauthorized' });
@@ -32,7 +39,12 @@ export default async function handler(
   }
 
   const method = (req.method || 'GET').toUpperCase();
-  const { appsScriptUrl, appsScriptToken } = await getServerCloudConfig(req);
+  const {
+    appsScriptUrl,
+    appsScriptToken,
+    googleSheetUrl,
+    googleDriveFolderUrl,
+  } = await getServerCloudConfig(req);
 
   // Status probe so UI knows whether server/external cloud config is ready without leaking token
   if (method === 'GET' && req.query?.mode === 'status') {
@@ -63,14 +75,16 @@ export default async function handler(
 
   if (method === 'GET') {
     try {
-      const targetUrl = new URL(appsScriptUrl);
-      targetUrl.searchParams.set('action', 'getAllData');
-      targetUrl.searchParams.set('token', appsScriptToken);
-      targetUrl.searchParams.set('t', String(Date.now()));
-
-      const upstream = await fetch(targetUrl.toString(), {
-        method: 'GET',
+      const upstream = await fetch(appsScriptUrl, {
+        method: 'POST',
         redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'getAllData',
+          token: appsScriptToken,
+          ...(googleSheetUrl ? { googleSheetUrl } : {}),
+          ...(googleDriveFolderUrl ? { googleDriveFolderUrl } : {}),
+        }),
       });
 
       const rawText = await upstream.text();
@@ -88,7 +102,7 @@ export default async function handler(
         const looksLikeHtml = rawText.trim().startsWith('<');
         sendJson(res, 502, {
           error: looksLikeHtml
-            ? 'Apps Script mengembalikan halaman HTML/login (bukan JSON). Pastikan Web App di-deploy dengan "Who has access: Anyone" dan URL berakhiran /exec.'
+            ? 'Apps Script mengembalikan halaman HTML/login (bukan JSON). Pastikan Web App di-deploy dengan "Who has access: Anyone" (Manage deployments → New version) dan URL berakhiran /exec.'
             : 'Respons Apps Script tidak valid (bukan JSON).',
         });
         return;
@@ -102,9 +116,13 @@ export default async function handler(
         return;
       }
 
-      if (typeof parsed.error === 'string' && parsed.error) {
+      if (parsed.status === 'error' || (typeof parsed.error === 'string' && parsed.error)) {
+        const errDetail =
+          (typeof parsed.error === 'string' && parsed.error) ||
+          (typeof parsed.message === 'string' && parsed.message) ||
+          'Apps Script mengembalikan status error.';
         sendJson(res, 502, {
-          error: `Apps Script error: ${parsed.error}`,
+          error: `Apps Script error: ${errDetail}`,
         });
         return;
       }
@@ -142,6 +160,10 @@ export default async function handler(
     const sanitizedPayload: Record<string, unknown> = {
       ...body,
       token: appsScriptToken,
+      ...(googleSheetUrl && !body.googleSheetUrl ? { googleSheetUrl } : {}),
+      ...(googleDriveFolderUrl && !body.googleDriveFolderUrl
+        ? { googleDriveFolderUrl }
+        : {}),
     };
 
     if (sanitizedPayload.storeSettings) {
@@ -192,9 +214,16 @@ export default async function handler(
         return;
       }
 
-      if (typeof parsed.error === 'string' && parsed.error) {
+      if (
+        parsed.status === 'error' ||
+        (typeof parsed.error === 'string' && parsed.error)
+      ) {
+        const errDetail =
+          (typeof parsed.error === 'string' && parsed.error) ||
+          (typeof parsed.message === 'string' && parsed.message) ||
+          'Apps Script mengembalikan status error.';
         sendJson(res, 502, {
-          error: `Apps Script error: ${parsed.error}`,
+          error: `Apps Script error: ${errDetail}`,
         });
         return;
       }

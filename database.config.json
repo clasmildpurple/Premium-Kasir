@@ -1,7 +1,0 @@
-{
-  "_comment": "Pengaturan database eksternal PinkPOS (di luar folder src/ & dist/). Pengguna dapat mengubah appsScriptUrl & appsScriptToken langsung di sini atau melalui menu Setting di aplikasi. Untuk memindahkan file ini ke luar folder aplikasi sepenuhnya, atur env DATABASE_CONFIG_PATH.",
-  "appsScriptUrl": "",
-  "appsScriptToken": "",
-  "googleSheetUrl": "",
-  "googleDriveFolderUrl": ""
-}

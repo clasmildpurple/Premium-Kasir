@@ -1322,8 +1322,8 @@ export const GoogleCloudIntegrationPanel: React.FC<
             </li>
             <li>
               {isId
-                ? 'Deploy Apps Script sebagai Web App (Execute as: Me, Who has access: Anyone). File Google Spreadsheet tetap PRIVAT (tidak dibuka publik).'
-                : 'Deploy Apps Script as Web App (Execute as: Me, Who has access: Anyone). Keep the Google Spreadsheet PRIVATE (not public).'}
+                ? 'Deploy Apps Script sebagai Web App (Execute as: Me, Who has access: Anyone). Setiap kali memperbarui Code.gs, lakukan deploy ulang via Manage deployments → New version. File Google Spreadsheet tetap PRIVAT (tidak dibuka publik).'
+                : 'Deploy Apps Script as Web App (Execute as: Me, Who has access: Anyone). Whenever updating Code.gs, redeploy via Manage deployments → New version. Keep the Google Spreadsheet PRIVATE (not public).'}
             </li>
             <li>
               {isId

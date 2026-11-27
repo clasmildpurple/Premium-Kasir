@@ -4,8 +4,16 @@ import {
   StoreBrandingSettings,
   TRANSLATIONS,
 } from '../data/i18nAndSettings';
+import {
+  PermanentGoogleConfig,
+  generateAppsScriptCode,
+} from '../data/posData';
 import { BrandLogo } from './PosIllustrations';
 import {
+  Check,
+  Code2,
+  Copy,
+  ExternalLink,
   Eye,
   EyeOff,
   Globe,
@@ -13,26 +21,38 @@ import {
   Loader2,
   Lock,
   LogIn,
+  Save,
+  Settings,
   ShieldCheck,
   User,
 } from 'lucide-react';
 
 interface LoginViewProps {
   storeSettings: StoreBrandingSettings;
+  googleConfig?: PermanentGoogleConfig;
   needsSetup?: boolean;
+  cloudConfigured?: boolean;
+  missingSessionSecret?: boolean;
+  onCloudConfigured?: (sheetUrl?: string) => void;
   onToggleLanguage: () => void;
   onLoginSuccess: (cashierName: string) => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
   storeSettings,
+  googleConfig,
   needsSetup = false,
+  cloudConfigured = false,
+  missingSessionSecret = false,
+  onCloudConfigured,
   onToggleLanguage,
   onLoginSuccess,
 }) => {
   const t = TRANSLATIONS[storeSettings.language as Language];
   const isId = storeSettings.language === 'id';
   const primaryColor = storeSettings.primaryColor || '#FF2457';
+
+  const [activeTab, setActiveTab] = useState<'account' | 'database'>('account');
 
   // Always start completely empty — never autofill credentials
   const [username, setUsername] = useState('');
@@ -43,6 +63,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [forceLoginMode, setForceLoginMode] = useState(false);
 
+  // Upfront Database Settings state (never prefilled with secret token)
+  const [appsScriptUrl, setAppsScriptUrl] = useState('');
+  const [appsScriptToken, setAppsScriptToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [googleSheetUrl, setGoogleSheetUrl] = useState('');
+  const [googleDriveFolderUrl, setGoogleDriveFolderUrl] = useState('');
+  const [showCodeGsPreview, setShowCodeGsPreview] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isSavingDb, setIsSavingDb] = useState(false);
+  const [dbErrorMsg, setDbErrorMsg] = useState('');
+  const [dbSuccessMsg, setDbSuccessMsg] = useState('');
+  const [connectedSheetUrl, setConnectedSheetUrl] = useState('');
+  const [localCloudConfigured, setLocalCloudConfigured] =
+    useState(cloudConfigured);
+
+  React.useEffect(() => {
+    if (cloudConfigured) {
+      setLocalCloudConfigured(true);
+    }
+  }, [cloudConfigured]);
+
   const isSetupMode = needsSetup && !forceLoginMode;
 
   const handleToggleSetupOrLogin = (goToLogin: boolean) => {
@@ -51,6 +92,146 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setPassword('');
     setConfirmPassword('');
   };
+
+  const handleCopyText = (key: string, val: string) => {
+    navigator.clipboard.writeText(val);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleGenerateRandomToken = () => {
+    const bytes = new Uint8Array(24);
+    if (
+      typeof window !== 'undefined' &&
+      window.crypto &&
+      typeof window.crypto.getRandomValues === 'function'
+    ) {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+    }
+    const token = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(
+      ''
+    );
+    setAppsScriptToken(token);
+    setShowToken(true);
+  };
+
+  const handleSaveDatabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingDb) return;
+
+    const trimmedUrl = appsScriptUrl.trim();
+    const trimmedToken = appsScriptToken.trim();
+    if (!trimmedUrl || !trimmedToken) {
+      setDbErrorMsg(
+        isId
+          ? 'URL Web App Apps Script (/exec) dan API Token wajib diisi.'
+          : 'Apps Script Web App URL (/exec) and API Token are required.'
+      );
+      setDbSuccessMsg('');
+      return;
+    }
+
+    if (!isSetupMode && (!username.trim() || !password)) {
+      setDbErrorMsg(
+        isId
+          ? 'Masukkan Username & Password admin pada kolom verifikasi di bawah untuk menyimpan pengaturan database.'
+          : 'Enter your admin Username & Password below to verify and save database settings.'
+      );
+      setDbSuccessMsg('');
+      return;
+    }
+
+    setDbErrorMsg('');
+    setDbSuccessMsg('');
+    setIsSavingDb(true);
+
+    try {
+      const res = await fetch('/api/cloud-config', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify({
+          appsScriptUrl: trimmedUrl,
+          appsScriptToken: trimmedToken,
+          googleSheetUrl: googleSheetUrl.trim(),
+          googleDriveFolderUrl: googleDriveFolderUrl.trim(),
+          ...(isSetupMode
+            ? {}
+            : {
+                adminUsername: username.trim(),
+                adminPassword: password,
+              }),
+          verifyConnection: true,
+        }),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        connectionOk?: boolean;
+        connectionError?: string;
+        sheetUrl?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        setDbErrorMsg(
+          data.error ||
+            (isId
+              ? 'Gagal menyimpan pengaturan database.'
+              : 'Failed to save database configuration.')
+        );
+        return;
+      }
+
+      setLocalCloudConfigured(true);
+      if (data.sheetUrl) {
+        setConnectedSheetUrl(data.sheetUrl);
+        if (!googleSheetUrl.trim()) {
+          setGoogleSheetUrl(data.sheetUrl);
+        }
+      }
+      onCloudConfigured?.(data.sheetUrl);
+
+      if (data.connectionOk) {
+        setDbSuccessMsg(
+          isId
+            ? 'Pengaturan database tersimpan & Google Sheet berhasil terhubung / dibuat otomatis!'
+            : 'Database settings saved & Google Sheet connected / auto-created!'
+        );
+      } else {
+        setDbErrorMsg(
+          data.connectionError ||
+            (isId
+              ? 'Pengaturan tersimpan, namun koneksi ke Apps Script gagal. Periksa deployment Web App ("Anyone") dan API_TOKEN.'
+              : 'Settings saved, but connecting to Apps Script failed. Verify Web App deployment ("Anyone") and API_TOKEN.')
+        );
+      }
+    } catch {
+      setDbErrorMsg(
+        isId
+          ? 'Gagal menghubungi server untuk menyimpan pengaturan database.'
+          : 'Failed to reach server to save database settings.'
+      );
+    } finally {
+      setIsSavingDb(false);
+    }
+  };
+
+  const generatedScript = generateAppsScriptCode({
+    GOOGLE_SHEET_URL: googleSheetUrl.trim() || googleConfig?.GOOGLE_SHEET_URL || '',
+    GOOGLE_DRIVE_FOLDER_URL:
+      googleDriveFolderUrl.trim() || googleConfig?.GOOGLE_DRIVE_FOLDER_URL || '',
+    SHEET_NAME_PRODUCTS: googleConfig?.SHEET_NAME_PRODUCTS || 'Products',
+    SHEET_NAME_ORDERS: googleConfig?.SHEET_NAME_ORDERS || 'Orders',
+    LAST_SYNCED: '',
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,6 +263,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     try {
       const endpoint = isSetupMode ? '/api/setup-admin' : '/api/login';
+      const setupCloudPayload =
+        isSetupMode && appsScriptUrl.trim() && appsScriptToken.trim()
+          ? {
+              appsScriptUrl: appsScriptUrl.trim(),
+              appsScriptToken: appsScriptToken.trim(),
+              googleSheetUrl: googleSheetUrl.trim(),
+              googleDriveFolderUrl: googleDriveFolderUrl.trim(),
+            }
+          : undefined;
+
       const res = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
@@ -91,7 +282,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
         },
         body: JSON.stringify(
           isSetupMode
-            ? { username: trimmedUser, password, confirmPassword }
+            ? {
+                username: trimmedUser,
+                password,
+                confirmPassword,
+                ...(setupCloudPayload ? { cloudConfig: setupCloudPayload } : {}),
+              }
             : { username: trimmedUser, password }
         ),
       });
@@ -147,7 +343,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   return (
     <div className="w-[94%] sm:w-[88%] md:w-[84%] lg:w-[82%] max-w-[900px] xl:max-w-[940px] h-[88dvh] sm:h-[86dvh] lg:h-[86dvh] min-h-[580px] max-h-[840px] mx-auto my-auto bg-white rounded-[24px] sm:rounded-[28px] lg:rounded-[32px] shadow-2xl border-[4px] sm:border-[5px] lg:border-[6px] border-white grid grid-cols-1 lg:grid-cols-12 overflow-y-auto lg:overflow-hidden relative animate-stage-transition">
-      {/* Top-Right Language Switcher */}
+      {/* Top-Right Language Switcher & Database Settings Gear */}
       <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20 flex items-center gap-2">
         <button
           type="button"
@@ -158,6 +354,48 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <span>
             {storeSettings.language === 'id' ? 'Bahasa: ID' : 'Language: EN'}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            setActiveTab((prev) => (prev === 'database' ? 'account' : 'database'))
+          }
+          aria-pressed={activeTab === 'database'}
+          aria-label={isId ? 'Pengaturan Database' : 'Database Settings'}
+          title={
+            activeTab === 'database'
+              ? isId
+                ? 'Kembali ke Login'
+                : 'Back to Login'
+              : isId
+              ? 'Pengaturan Database'
+              : 'Database Settings'
+          }
+          style={
+            activeTab === 'database'
+              ? {
+                  borderColor: primaryColor,
+                  backgroundColor: `${primaryColor}12`,
+                  color: primaryColor,
+                }
+              : undefined
+          }
+          className="relative inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-[#F8F9FA] hover:bg-slate-200/70 text-[#2D3748] border border-slate-200/70 transition-all cursor-pointer shrink-0"
+        >
+          <Settings
+            className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform duration-200 ${
+              activeTab === 'database' ? 'rotate-45' : ''
+            }`}
+            style={{
+              color: activeTab === 'database' ? primaryColor : '#4A5568',
+            }}
+          />
+          <span
+            className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${
+              localCloudConfigured ? 'bg-emerald-500' : 'bg-amber-500'
+            }`}
+          />
         </button>
       </div>
 
@@ -513,7 +751,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </svg>
         </div>
 
-        <div className="relative z-10 flex items-center gap-3 pr-28 sm:pr-0">
+        <div className="relative z-10 flex items-center gap-3 pr-36 sm:pr-0">
           <BrandLogo
             size="md"
             color={primaryColor}
@@ -553,153 +791,459 @@ export const LoginView: React.FC<LoginViewProps> = ({
         </div>
       </div>
 
-      {/* Right Login Form Column (7 cols) */}
-      <div className="lg:col-span-7 p-6 sm:p-10 lg:p-12 xl:p-14 flex flex-col justify-center max-w-lg mx-auto w-full">
-        <div className="mb-5 sm:mb-7">
-          <h2 className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-[#2D3748]">
-            {isSetupMode
-              ? isId
-                ? 'Setup Akun Admin'
-                : 'Initial Admin Setup'
-              : t.loginWelcome}
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            {isSetupMode
-              ? isId
-                ? 'Buat username dan password admin pertama kali (minimal 8 karakter).'
-                : 'Create your first-run admin username and password (min 8 chars).'
-              : t.loginSubtitle}
-          </p>
-        </div>
+      {/* Right Login / Database Setup Column (7 cols) */}
+      <div className="lg:col-span-7 p-6 sm:p-8 lg:p-10 xl:p-12 pt-14 sm:pt-14 flex flex-col justify-start lg:justify-center max-w-xl mx-auto w-full lg:overflow-y-auto">
 
-        <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-4.5" autoComplete="off">
-          <div>
-            <label className="block text-xs font-bold text-[#2D3748] mb-2">
-              {t.usernameLabel}
-            </label>
-            <div className="relative">
-              <User className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder={isId ? 'Masukkan username...' : 'Enter username...'}
-                className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
-              />
-            </div>
+        {missingSessionSecret && (
+          <div className="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[11px] font-medium text-amber-800">
+            {isId
+              ? 'Catatan Vercel: Env SESSION_SECRET belum diisi di Vercel Project Settings. Tambahkan SESSION_SECRET (min. 32 karakter) agar sesi login & database konsisten di semua serverless function.'
+              : 'Vercel note: SESSION_SECRET env var is not set. Add SESSION_SECRET (min 32 chars) in Vercel Project Settings so login sessions persist across serverless functions.'}
           </div>
+        )}
 
-          <div>
-            <label className="block text-xs font-bold text-[#2D3748] mb-2">
-              {t.passwordLabel}
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                autoComplete={isSetupMode ? 'new-password' : 'current-password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={
-                  isSetupMode
-                    ? isId
-                      ? 'Minimal 8 karakter...'
-                      : 'Minimum 8 characters...'
-                    : isId
-                    ? 'Masukkan password...'
-                    : 'Enter password...'
-                }
-                className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-11 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
-              />
+        {activeTab === 'account' ? (
+          <>
+            <div className="mb-4 sm:mb-5">
+              <h2 className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-[#2D3748]">
+                {isSetupMode
+                  ? isId
+                    ? 'Setup Akun Admin'
+                    : 'Initial Admin Setup'
+                  : t.loginWelcome}
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-400 mt-1">
+                {isSetupMode
+                  ? isId
+                    ? 'Buat username dan password admin pertama kali (minimal 8 karakter).'
+                    : 'Create your first-run admin username and password (min 8 chars).'
+                  : t.loginSubtitle}
+              </p>
+            </div>
+
+            <form
+              onSubmit={handleSubmit}
+              className="space-y-3.5 sm:space-y-4"
+              autoComplete="off"
+            >
+              <div>
+                <label className="block text-xs font-bold text-[#2D3748] mb-1.5">
+                  {t.usernameLabel}
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={
+                      isId ? 'Masukkan username...' : 'Enter username...'
+                    }
+                    className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#2D3748] mb-1.5">
+                  {t.passwordLabel}
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={
+                      isSetupMode ? 'new-password' : 'current-password'
+                    }
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={
+                      isSetupMode
+                        ? isId
+                          ? 'Minimal 8 karakter...'
+                          : 'Minimum 8 characters...'
+                        : isId
+                        ? 'Masukkan password...'
+                        : 'Enter password...'
+                    }
+                    className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-11 py-3 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                    title={showPassword ? 'Sembunyikan' : 'Tampilkan'}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {isSetupMode && (
+                <div>
+                  <label className="block text-xs font-bold text-[#2D3748] mb-1.5">
+                    {t.confirmPasswordLabel}
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder={
+                        isId ? 'Ulangi password...' : 'Confirm password...'
+                      }
+                      className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {errorMsg && (
+                <p className="text-xs font-semibold text-rose-600">
+                  {errorMsg}
+                </p>
+              )}
+
               <button
-                type="button"
-                onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
-                title={showPassword ? 'Sembunyikan' : 'Tampilkan'}
+                type="submit"
+                disabled={isLoggingIn}
+                style={{ backgroundColor: primaryColor }}
+                className="w-full py-3.5 rounded-2xl text-white font-bold text-sm sm:text-base shadow-lg hover:opacity-95 disabled:opacity-70 active:scale-[0.99] transition-all cursor-pointer flex items-center justify-center gap-2"
               >
-                {showPassword ? (
-                  <EyeOff className="w-4 h-4" />
+                {isLoggingIn ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>
+                      {isId ? 'Memverifikasi...' : 'Signing in...'}
+                    </span>
+                  </>
                 ) : (
-                  <Eye className="w-4 h-4" />
+                  <>
+                    <KeyRound className="w-4 h-4" />
+                    <span>
+                      {isSetupMode
+                        ? isId
+                          ? 'Simpan & Masuk ke POS'
+                          : 'Create Admin & Sign In'
+                        : t.loginButton}
+                    </span>
+                  </>
                 )}
               </button>
-            </div>
-          </div>
 
-          {isSetupMode && (
+              {needsSetup && (
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetupOrLogin(!forceLoginMode)}
+                  className="w-full py-2.5 rounded-2xl border border-slate-200 bg-[#F8F9FA] hover:bg-slate-100 text-[#2D3748] font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <LogIn className="w-4 h-4" style={{ color: primaryColor }} />
+                  <span>
+                    {isSetupMode
+                      ? isId
+                        ? 'Sudah Punya Akun Admin? Login'
+                        : 'Already Have an Admin Account? Login'
+                      : isId
+                      ? 'Belum Punya Akun Admin? Setup Akun'
+                      : 'Need First-Time Setup? Create Admin'}
+                  </span>
+                </button>
+              )}
+
+            </form>
+          </>
+        ) : (
+          <form
+            onSubmit={handleSaveDatabaseConfig}
+            className="space-y-3"
+            autoComplete="off"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg sm:text-xl font-extrabold text-[#2D3748]">
+                  {isId
+                    ? 'Pengaturan Database Awal'
+                    : 'Initial Database Setup'}
+                </h2>
+                <p className="text-[11px] sm:text-xs text-slate-400">
+                  {isId
+                    ? 'Hubungkan Google Apps Script sebelum mulai menggunakan kasir.'
+                    : 'Connect Google Apps Script before using the POS.'}
+                </p>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                  localCloudConfigured
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {localCloudConfigured
+                  ? isId
+                    ? 'Tersimpan'
+                    : 'Configured'
+                  : isId
+                  ? 'Belum Diatur'
+                  : 'Not Set'}
+              </span>
+            </div>
+
+            {dbErrorMsg && (
+              <div className="rounded-xl bg-rose-50 border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700">
+                {dbErrorMsg}
+              </div>
+            )}
+
+            {dbSuccessMsg && (
+              <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-700 space-y-1">
+                <div>{dbSuccessMsg}</div>
+                {connectedSheetUrl && (
+                  <a
+                    href={connectedSheetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 underline font-bold"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>
+                      {isId
+                        ? 'Buka Google Sheet yang Terhubung'
+                        : 'Open Connected Google Sheet'}
+                    </span>
+                  </a>
+                )}
+              </div>
+            )}
+
             <div>
-              <label className="block text-xs font-bold text-[#2D3748] mb-2">
-                {t.confirmPasswordLabel}
+              <label className="block text-[11px] font-bold text-[#2D3748] mb-1">
+                {isId
+                  ? '1. URL Web App Google Apps Script (/exec)'
+                  : '1. Google Apps Script Web App URL (/exec)'}
               </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+              <input
+                type="url"
+                required
+                value={appsScriptUrl}
+                onChange={(e) => setAppsScriptUrl(e.target.value)}
+                placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+                className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-mono text-[#2D3748] focus:outline-none focus:border-slate-400"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="block text-[11px] font-bold text-[#2D3748]">
+                  {isId
+                    ? '2. API Token Apps Script (API_TOKEN)'
+                    : '2. Apps Script API Token (API_TOKEN)'}
+                </label>
+                <button
+                  type="button"
+                  onClick={handleGenerateRandomToken}
+                  style={{ color: primaryColor }}
+                  className="text-[11px] font-bold hover:underline cursor-pointer"
+                >
+                  {isId ? '+ Buat Token Acak' : '+ Generate Token'}
+                </button>
+              </div>
+              <div className="flex gap-1.5">
+                <div className="relative flex-1">
+                  <input
+                    type={showToken ? 'text' : 'password'}
+                    required
+                    value={appsScriptToken}
+                    onChange={(e) => setAppsScriptToken(e.target.value)}
+                    placeholder={
+                      isId
+                        ? 'Samakan dengan API_TOKEN di Script Properties'
+                        : 'Match API_TOKEN in Script Properties'
+                    }
+                    className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl pl-3.5 pr-9 py-2.5 text-xs font-mono text-[#2D3748] focus:outline-none focus:border-slate-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                  >
+                    {showToken ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={!appsScriptToken}
+                  onClick={() => handleCopyText('dbToken', appsScriptToken)}
+                  className="px-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  {copiedKey === 'dbToken' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label className="block text-[11px] font-bold text-[#2D3748] mb-1">
+                  {isId
+                    ? '3. Link Google Sheet (Opsional)'
+                    : '3. Google Sheet URL (Optional)'}
+                </label>
                 <input
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  type="url"
+                  value={googleSheetUrl}
+                  onChange={(e) => setGoogleSheetUrl(e.target.value)}
                   placeholder={
-                    isId ? 'Ulangi password...' : 'Confirm password...'
+                    isId ? 'Kosongkan = buat otomatis' : 'Blank = auto-create'
                   }
-                  className="w-full bg-[#F8F9FA] border border-slate-200 rounded-2xl pl-11 pr-4 py-3 sm:py-3.5 text-sm font-medium text-[#2D3748] focus:outline-none focus:border-slate-400"
+                  className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl px-3 py-2 text-[11px] font-mono text-[#2D3748] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-[#2D3748] mb-1">
+                  {isId
+                    ? '4. Folder Drive Foto (Opsional)'
+                    : '4. Drive Images Folder (Optional)'}
+                </label>
+                <input
+                  type="url"
+                  value={googleDriveFolderUrl}
+                  onChange={(e) => setGoogleDriveFolderUrl(e.target.value)}
+                  placeholder="https://drive.google.com/..."
+                  className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl px-3 py-2 text-[11px] font-mono text-[#2D3748] focus:outline-none"
                 />
               </div>
             </div>
-          )}
 
-          {errorMsg && (
-            <p className="text-xs font-semibold text-rose-600">{errorMsg}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={isLoggingIn}
-            style={{ backgroundColor: primaryColor }}
-            className="w-full py-3.5 sm:py-4 rounded-2xl text-white font-bold text-sm sm:text-base shadow-lg hover:opacity-95 disabled:opacity-70 active:scale-[0.99] transition-all cursor-pointer flex items-center justify-center gap-2"
-          >
-            {isLoggingIn ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>
-                  {isId ? 'Memverifikasi...' : 'Signing in...'}
-                </span>
-              </>
-            ) : (
-              <>
-                <KeyRound className="w-4 h-4" />
-                <span>
-                  {isSetupMode
-                    ? isId
-                      ? 'Simpan & Masuk ke POS'
-                      : 'Create Admin & Sign In'
-                    : t.loginButton}
-                </span>
-              </>
+            {!isSetupMode && (
+              <div className="rounded-xl bg-[#F8F9FA] border border-slate-200/80 p-3 space-y-2">
+                <div className="text-[11px] font-bold text-[#2D3748]">
+                  {isId
+                    ? 'Verifikasi Akun Admin (untuk izin ubah database)'
+                    : 'Admin Verification (required to update server database)'}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={isId ? 'Username admin...' : 'Admin username...'}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-[#2D3748] focus:outline-none"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={isId ? 'Password admin...' : 'Admin password...'}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-[#2D3748] focus:outline-none"
+                  />
+                </div>
+              </div>
             )}
-          </button>
 
-          {needsSetup && (
-            <div className="pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
               <button
                 type="button"
-                onClick={() => handleToggleSetupOrLogin(!forceLoginMode)}
-                className="w-full py-2.5 sm:py-3 rounded-2xl border border-slate-200 bg-[#F8F9FA] hover:bg-slate-100 text-[#2D3748] font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+                onClick={() => setShowCodeGsPreview((prev) => !prev)}
+                className="text-[11px] font-bold text-slate-600 hover:text-[#2D3748] flex items-center gap-1 cursor-pointer"
               >
-                <LogIn className="w-4 h-4" style={{ color: primaryColor }} />
+                <Code2 className="w-3.5 h-3.5" style={{ color: primaryColor }} />
                 <span>
-                  {isSetupMode
+                  {showCodeGsPreview
                     ? isId
-                      ? 'Sudah Punya Akun Admin? Login'
-                      : 'Already Have an Admin Account? Login'
+                      ? 'Tutup Code.gs'
+                      : 'Hide Code.gs'
                     : isId
-                    ? 'Belum Punya Akun Admin? Setup Akun'
-                    : 'Need First-Time Setup? Create Admin'}
+                    ? 'Lihat / Salin Code.gs'
+                    : 'View / Copy Code.gs'}
                 </span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => handleCopyText('loginCodeGs', generatedScript)}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+              >
+                {copiedKey === 'loginCodeGs' ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span>{isId ? 'Code.gs Tersalin!' : 'Copied!'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" />
+                    <span>{isId ? 'Salin Code.gs' : 'Copy Code.gs'}</span>
+                  </>
+                )}
+              </button>
             </div>
-          )}
-        </form>
+
+            {showCodeGsPreview && (
+              <pre className="bg-slate-900 text-slate-100 rounded-xl p-3 text-[10px] font-mono overflow-x-auto max-h-32 leading-relaxed">
+                {generatedScript}
+              </pre>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={isSavingDb}
+                style={{ backgroundColor: primaryColor }}
+                className="flex-1 py-3 px-4 rounded-2xl text-white font-bold text-xs sm:text-sm shadow-md hover:opacity-95 disabled:opacity-65 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isSavingDb ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>
+                      {isId
+                        ? 'Menyimpan & Menghubungkan...'
+                        : 'Saving & Connecting...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    <span>
+                      {isId
+                        ? 'Simpan & Hubungkan Database'
+                        : 'Save & Connect Database'}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('account')}
+                className="py-3 px-4 rounded-2xl border border-slate-200 bg-[#F8F9FA] hover:bg-slate-100 text-[#2D3748] font-bold text-xs sm:text-sm cursor-pointer"
+              >
+                {isSetupMode
+                  ? isId
+                    ? 'Lanjut Setup Akun →'
+                    : 'Next: Admin Setup →'
+                  : isId
+                  ? '← Kembali Login'
+                  : '← Back to Login'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

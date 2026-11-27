@@ -1,65 +1,90 @@
-# PinkPOS — Cloud Point of Sale
+# SukaPOS (PinkPOS) — Cloud Point of Sale
 
 Aplikasi kasir (Point of Sale) modern berbasis React 19, TypeScript, Vite, dan Tailwind CSS dengan autentikasi sesi terenkripsi (`scrypt` + signed `HttpOnly` cookie), backend proxy Vercel Serverless (`/api/*`), dan penyimpanan cloud Google Sheets melalui Google Apps Script.
 
 ## Fitur Utama
 
-- **Autentikasi Aman**: Hash password `scrypt` dengan salt acak per akun, cookie sesi `HttpOnly`, `Secure`, `SameSite=Lax` berdurasi 12 jam, rate-limit login (maksimal 5 kali gagal, tunggu 5 menit), serta form ganti password di menu **Setting**.
-- **Proxy Cloud Aman**: Browser hanya berkomunikasi dengan `/api/cloud`; URL `/exec` dan `APPS_SCRIPT_TOKEN` disimpan di environment variable server, sementara Google Apps Script memverifikasi `API_TOKEN` dari Script Properties.
-- **Sinkronisasi Per Transaksi & LockService**: Setiap checkout mengirim `addOrder` (bukan `syncAll`) dan mengurangi stok secara atomik memakai `LockService.getScriptLock()`. Penghapusan transaksi (`deleteOrder`) mengembalikan stok di aplikasi dan di Google Sheets.
-- **Antrean Offline & Batas Cache Lokal**: Jika koneksi terputus, transaksi masuk ke antrean offline `localStorage` dan dikirim ulang otomatis saat online. Cache riwayat lokal dibatasi 500 transaksi terbaru (sisanya tetap tersimpan di Google Sheets) dengan notifikasi error jika penyimpanan penuh/gagal.
-- **Fitur Kasir Lengkap**: Scanner barcode USB/Bluetooth HID, cetak struk thermal 80mm, laporan PDF penjualan, manajemen produk & kategori, kustomisasi branding/pajak, dan dukungan bahasa Indonesia/Inggris.
+- **Autentikasi & Perlindungan Bruteforce**: Hash password `scrypt` dengan salt acak per akun, cookie sesi `HttpOnly`, `Secure`, signed HMAC-SHA256 berdurasi 12 jam, rate-limit ganda (per IP terpercaya `x-vercel-forwarded-for` / `x-real-ip` DAN per username maksimal 5 gagal / 5 menit dengan penyimpanan bersama Upstash Redis REST + penundaan ~300 ms).
+- **Proxy Cloud Aman**: Browser hanya berkomunikasi dengan `/api/cloud`; URL `/exec` dan `APPS_SCRIPT_TOKEN` disimpan di server (`process.env` atau file konfigurasi eksternal). Token Apps Script dikirim lewat **body POST** (tidak pernah lewat query string URL) dan diverifikasi dengan perbandingan waktu-konstan di `Code.gs`.
+- **Sinkronisasi Per Transaksi & Indikator Koneksi**: Setiap checkout mengirim `addOrder` dan memperbarui stok secara atomik via `LockService.getScriptLock()`. Pojok kanan atas layar menampilkan status koneksi real-time (`Online · Google Sheet Aktif` vs `Offline / Sheet Terputus · Antrean Lokal`).
+- **Fitur Kasir Lengkap**: Scanner barcode USB/Bluetooth HID, cetak struk thermal 80mm, laporan PDF penjualan, manajemen produk & kategori, kustomisasi warna/font/logo toko, dan dukungan bahasa Indonesia/Inggris.
 
 ---
 
-## Setup Environment Variables (Vercel & Lokal)
+## Checklist Deploy Aman (Vercel & Production)
 
-Salin `.env.example` menjadi `.env` untuk pengembangan lokal, atau tambahkan variabel berikut di **Vercel Project Settings → Environment Variables**:
+Pastikan seluruh langkah berikut terpenuhi sebelum membagikan URL production:
+
+### 1. Environment Variables di Vercel
+Tambahkan di **Vercel Project Settings → Environment Variables**:
 
 | Variabel | Wajib | Keterangan |
 | :--- | :---: | :--- |
-| `SESSION_SECRET` | Ya | String acak minimal 32 karakter untuk menandatangani cookie sesi HMAC-SHA256. |
-| `ADMIN_USERNAME` | Ya | Username/email kasir atau admin untuk login (contoh: `kasir@tokoanda.id`). |
-| `ADMIN_PASSWORD_HASH` | Ya | Hash `scrypt` format `<saltHex>:<keyHex>`. Buat dengan perintah Node di bawah. |
-| `APPS_SCRIPT_URL` | Opsional | URL Web App Google Apps Script berakhiran `/exec` (bisa juga diisi via `database.config.json` atau menu **Setting**). |
-| `APPS_SCRIPT_TOKEN` | Opsional | Token rahasia yang nilainya harus sama persis dengan `API_TOKEN` di Script Properties Apps Script (bisa juga diisi via `database.config.json` atau menu **Setting**). |
-| `DATABASE_CONFIG_PATH` | Opsional | Path custom ke file JSON pengaturan database di luar folder aplikasi (contoh: `../pinkpos-database.config.json`). |
+| `SESSION_SECRET` | **Ya** | String acak minimal **32 karakter**. Di production, seluruh endpoint auth akan mengembalikan `500` (`SESSION_SECRET belum dikonfigurasi`) jika kosong atau `< 32` karakter. |
+| `ADMIN_USERNAME` | **Ya** | Username/email admin untuk login (contoh: `admin@tokoanda.id`). |
+| `ADMIN_PASSWORD_HASH` | **Ya** | Hash `scrypt` format `<saltHex>:<keyHex>` hasil `npm run hash-password -- "<password>"`. |
+| `APPS_SCRIPT_URL` | **Ya** | URL Web App Google Apps Script berakhiran `/exec`. |
+| `APPS_SCRIPT_TOKEN` | **Ya** | Token rahasia panjang acak yang nilainya sama persis dengan `API_TOKEN` di Script Properties Apps Script. |
+| `SETUP_TOKEN` | Opsional | Token sekali pakai (header `x-setup-token`) jika mengizinkan `/api/setup-admin` di production saat env admin belum diisi. Tanpa `SETUP_TOKEN`, setup awal di production dinonaktifkan (`403`). |
+| `UPSTASH_REDIS_REST_URL` | Disarankan | URL REST Redis Upstash agar batas rate-limit login berlaku lintas instance serverless Vercel. |
+| `UPSTASH_REDIS_REST_TOKEN` | Disarankan | Bearer token REST Redis Upstash. |
+| `DATABASE_CONFIG_PATH` | Opsional | Path custom ke file JSON pengaturan database di luar folder aplikasi (khusus hosting server/container non-Vercel). |
 
-### File Pengaturan Database Eksternal (Untuk Distribusi / Multi-Pembeli)
-
-Agar setiap pembeli/pengguna aplikasi dapat mengganti URL Google Apps Script dan database Google Sheets miliknya sendiri **tanpa menyentuh folder `src/` atau melakukan build ulang**:
-
-1. **Via Menu Setting di Aplikasi**: Setelah login, buka menu **Setting → Sinkronisasi Database 2 Arah**, lalu masukkan **URL Web App Google Apps Script (`/exec`)** dan **API Token (`API_TOKEN`)**, lalu klik **Simpan & Hubungkan Database**. Pengaturan otomatis disimpan ke file eksternal di luar `src/` & `dist/` (prioritas ke `DATABASE_CONFIG_PATH` atau `../pinkpos-database.config.json`, fallback ke `database.config.json` di root).
-2. **Edit File Secara Langsung**: Pengguna dapat langsung mengedit file `database.config.json` (di luar `src/` & `dist/`) atau membuat file `pinkpos-database.config.json` satu level di luar folder aplikasi (atau menentukan lokasi custom lewat env `DATABASE_CONFIG_PATH`).
-   - Demi keamanan, `appsScriptToken` tidak pernah dikirim kembali ke browser maupun dibundel ke dalam `dist/`.
-
-### Cara Membuat `ADMIN_PASSWORD_HASH`
-
-Jalankan perintah berikut di terminal (ganti `PasswordKuatAnda` dengan password minimal 8 karakter):
+### 2. Membuat `ADMIN_PASSWORD_HASH`
+Jalankan perintah berikut di terminal (password minimal 8 karakter):
 
 ```bash
-node -e "const c=require('crypto'),s=c.randomBytes(16).toString('hex'),h=c.scryptSync('PasswordKuatAnda',s,64).toString('hex');console.log(s+':'+h)"
+npm run hash-password -- "PasswordKuatAnda"
 ```
 
-Tempel output `<salt>:<hash>` ke `ADMIN_PASSWORD_HASH` di Vercel atau `.env`.
+Salin output `<salt>:<hash>` ke `ADMIN_PASSWORD_HASH` di Vercel atau `.env` lokal.  
+*(Catatan: di production Vercel, mengubah password secara permanen dilakukan dengan membuat hash baru lewat perintah di atas lalu memperbarui env `ADMIN_PASSWORD_HASH` dan redeploy.)*
 
-> **Catatan setup awal:** Jika `ADMIN_USERNAME` / `ADMIN_PASSWORD_HASH` belum diisi pada saat deploy pertama, halaman login akan menampilkan form inisialisasi akun admin pertama kali sebelum masuk.
+### 3. Merotasi Secret & Token
+- **Rotasi `SESSION_SECRET`**: Buat string acak baru minimal 32 karakter (`openssl rand -hex 32`), perbarui di Vercel Environment Variables, lalu redeploy. Semua sesi lama otomatis tidak valid sehingga admin harus login ulang.
+- **Rotasi `APPS_SCRIPT_TOKEN` / `API_TOKEN`**:
+  1. Buat token acak baru minimal 32 karakter (`openssl rand -hex 24`).
+  2. Perbarui Script Property `API_TOKEN` di Google Apps Script.
+  3. Perbarui `APPS_SCRIPT_TOKEN` di Vercel Environment Variables (atau di menu Setting / `database.config.json` untuk server lokal) lalu redeploy.
+- **Rotasi `ADMIN_PASSWORD_HASH`**: Jalankan `npm run hash-password -- "<password-baru>"`, perbarui `ADMIN_PASSWORD_HASH` di Vercel, lalu redeploy.
+
+### 4. Kebersihan Git & Penghapusan Riwayat File Sensitif
+File `.gitignore` sudah mengecualikan `.env`, `.env.*` (kecuali `.env.example`), `.data/`, `.aistudio/`, dan `database.config.json` (gunakan `database.config.example.json` sebagai template kosong).  
+Jika folder `.data/`, `.aistudio/`, `.env`, atau `database.config.json` berisi secret **pernah ter-commit ke Git**:
+
+```bash
+# Hapus dari tracking index git saat ini
+git rm -r --cached .data .aistudio database.config.json .env
+
+# Opsional: bersihkan dari seluruh riwayat commit dengan git-filter-repo
+git filter-repo --invert-paths --path .data --path .aistudio --path database.config.json --path .env
+```
+
+> **Penting:** Jika file-file tersebut pernah ter-commit ke repository (terutama repository publik/bersama), **segera ganti semua secret dan token** (`SESSION_SECRET`, `ADMIN_PASSWORD_HASH`, `API_TOKEN` / `APPS_SCRIPT_TOKEN`, `SETUP_TOKEN`).
+
+---
+
+## Arsitektur Server (`server.ts` vs Vercel `/api/*`)
+
+- **Deploy ke Vercel**: Vercel otomatis menjalankan serverless function di folder `/api/*` (`vercel.json`) dan melayani frontend statis hasil `npm run build` (`dist/`). File `server.ts` tidak dijalankan oleh Vercel.
+- **Hosting Lokal / Node Container Lain (`server.ts`, `express`, `dotenv`)**: File `server.ts`, paket `express`, dan `dotenv` sengaja dipertahankan untuk development lokal (`npm run dev` di port 3000) dan hosting Node/Docker non-Vercel (`npm start`).
 
 ---
 
 ## Cara Deploy Google Apps Script (Database Privat)
 
 1. Buka [script.google.com](https://script.google.com) → **New project**.
-2. Buka menu **Setting** di PinkPOS (atau salin template `Code.gs` dari `src/data/posData.ts` melalui panel **Google Cloud Integration**), lalu tempel ke editor `Code.gs`.
+2. Buka menu **Setting** (atau tab **Setting Database** di halaman login) untuk menyalin template `Code.gs`, lalu tempel ke editor Apps Script.
 3. Di Apps Script, buka **Project Settings (ikon roda gigi) → Script Properties → Add script property**:
    - **Property**: `API_TOKEN`
-   - **Value**: token rahasia acak (samakan persis dengan `APPS_SCRIPT_TOKEN` di `database.config.json` / menu Setting / Vercel).
+   - **Value**: token rahasia acak minimal 32 karakter (samakan dengan `APPS_SCRIPT_TOKEN`).
 4. Klik **Deploy → New deployment**:
    - **Type**: Web app
    - **Execute as**: `Me`
-   - **Who has access**: `Anyone` (keamanan dijaga melalui verifikasi `API_TOKEN` dan Spreadsheet tetap **Privat** tanpa `ANYONE_WITH_LINK + EDIT`; hanya folder foto produk Drive yang `VIEW`-only).
-5. Salin URL `/exec` hasil deploy ke menu **Setting** di PinkPOS, file `database.config.json` / `pinkpos-database.config.json`, atau environment variable `APPS_SCRIPT_URL` di Vercel.
-6. Setelah masuk ke PinkPOS, buka menu **Setting → Kirim Semua (Aplikasi → Sheet)** satu kali untuk membuat tab `Products`, `Orders`, `Categories`, dan `StoreSettings` secara otomatis.
+   - **Who has access**: `Anyone` (keamanan dijaga melalui verifikasi konstanta-waktu `API_TOKEN` di body POST; Spreadsheet tetap **Privat** tanpa akses publik, hanya folder foto Drive yang `VIEW`-only).
+   - **Saat memperbarui `Code.gs`**: wajib klik **Deploy → Manage deployments → ikon Edit → Version: New version → Deploy** agar perubahan kode aktif pada URL `/exec` yang sama.
+5. Salin URL `/exec` ke `APPS_SCRIPT_URL` di Vercel (atau isi via menu Setting untuk hosting non-Vercel).
+6. Setelah terhubung, aplikasi otomatis menginisialisasi tab `Products`, `Orders`, `Categories`, dan `StoreSettings`.
 
 ---
 
@@ -69,13 +94,17 @@ Tempel output `<salt>:<hash>` ke `ADMIN_PASSWORD_HASH` di Vercel atau `.env`.
 # Install dependencies
 npm install
 
+# Salin template environment & config (opsional untuk non-Vercel)
+cp .env.example .env
+cp database.config.example.json database.config.json
+
 # Jalankan server dev (port 3000)
 npm run dev
 
 # Cek TypeScript types
 npm run lint
 
-# Jalankan unit test (Vitest)
+# Jalankan seluruh unit & security test (Vitest)
 npm test
 
 # Build produksi

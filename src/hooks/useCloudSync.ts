@@ -1088,7 +1088,15 @@ export function useCloudSync({
 
       if (!cancelled) {
         await flushOfflineQueue();
-        await handleSyncTwoWay(true);
+        const syncResult = await handleSyncTwoWay(true);
+        if (
+          !cancelled &&
+          syncResult.ok &&
+          !syncResult.pulledFromSheet &&
+          latestStateRef.current.products.length > 0
+        ) {
+          await handleSyncAllToCloud();
+        }
       }
     };
 
@@ -1121,6 +1129,7 @@ export function useCloudSync({
     refreshCloudConfigMeta,
     flushOfflineQueue,
     handleSyncTwoWay,
+    handleSyncAllToCloud,
     persistStateToServer,
     notifyStorageError,
     setCategories,

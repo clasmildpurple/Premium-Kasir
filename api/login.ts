@@ -1,8 +1,10 @@
+import crypto from 'node:crypto';
 import {
-  buildAdminRecordCookieHeader,
   buildSessionCookieHeader,
   checkLoginRateLimit,
   clearLoginFailures,
+  delayFailedLogin,
+  ensureSessionSecretReady,
   getActiveAdminCredentials,
   recordLoginFailure,
   signSessionToken,
@@ -16,6 +18,13 @@ import {
   sendJson,
 } from './_lib/http.js';
 
+function safeEqualLower(a: string, b: string): boolean {
+  const bufA = Buffer.from(a.trim().toLowerCase(), 'utf-8');
+  const bufB = Buffer.from(b.trim().toLowerCase(), 'utf-8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export default async function handler(
   req: ApiRequest,
   res: ApiResponse
@@ -27,6 +36,10 @@ export default async function handler(
 
   if (!isValidCsrfOrigin(req)) {
     sendJson(res, 403, { error: 'Invalid request origin' });
+    return;
+  }
+
+  if (!ensureSessionSecretReady(res)) {
     return;
   }
 
@@ -44,7 +57,7 @@ export default async function handler(
     return;
   }
 
-  const rateCheck = checkLoginRateLimit(req, username);
+  const rateCheck = await checkLoginRateLimit(req, username);
   if (!rateCheck.allowed) {
     res.setHeader('Retry-After', String(rateCheck.retryAfterSeconds));
     sendJson(res, 429, {
@@ -54,7 +67,7 @@ export default async function handler(
     return;
   }
 
-  const creds = await getActiveAdminCredentials(req);
+  const creds = await getActiveAdminCredentials();
   if (creds.source === 'unset' || !creds.passwordHash || !creds.username) {
     sendJson(res, 503, {
       error:
@@ -64,12 +77,12 @@ export default async function handler(
     return;
   }
 
-  const usernameMatches =
-    username.toLowerCase() === creds.username.toLowerCase();
   const passwordMatches = verifyPasswordScrypt(password, creds.passwordHash);
+  const usernameMatches = safeEqualLower(username, creds.username);
 
   if (!usernameMatches || !passwordMatches) {
-    const failureInfo = recordLoginFailure(req, username);
+    await delayFailedLogin(300);
+    const failureInfo = await recordLoginFailure(req, username);
     if (failureInfo.locked) {
       res.setHeader('Retry-After', String(failureInfo.retryAfterSeconds));
       sendJson(res, 429, {
@@ -81,23 +94,15 @@ export default async function handler(
     }
 
     sendJson(res, 401, {
-      error: `Username atau password salah. Sisa percobaan: ${failureInfo.remainingAttempts}.`,
-      remainingAttempts: failureInfo.remainingAttempts,
+      error: 'Username atau password salah.',
     });
     return;
   }
 
-  clearLoginFailures(req, username);
+  await clearLoginFailures(req, username);
 
   const token = signSessionToken(creds.username);
   const cookieHeader = buildSessionCookieHeader(req, token);
-  const cookies =
-    creds.source === 'runtime'
-      ? [
-          cookieHeader,
-          buildAdminRecordCookieHeader(req, creds.username, creds.passwordHash),
-        ]
-      : [cookieHeader];
 
   sendJson(
     res,
@@ -106,6 +111,6 @@ export default async function handler(
       authenticated: true,
       username: creds.username,
     },
-    { 'Set-Cookie': cookies }
+    { 'Set-Cookie': cookieHeader }
   );
 }

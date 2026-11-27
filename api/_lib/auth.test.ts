@@ -1,13 +1,12 @@
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import {
-  ADMIN_RECORD_COOKIE_NAME,
-  buildAdminRecordCookieHeader,
   buildSessionCookieHeader,
   checkLoginRateLimit,
   clearLoginFailures,
   getActiveAdminCredentials,
   hashPasswordScrypt,
+  isValidSetupToken,
   recordLoginFailure,
   signSessionToken,
   verifyPasswordScrypt,
@@ -19,7 +18,7 @@ function mockReq(
   headers: Record<string, string> = {}
 ): IncomingMessage {
   return {
-    headers: { 'x-forwarded-for': ip, ...headers },
+    headers: { 'x-real-ip': ip, ...headers },
     socket: { remoteAddress: ip },
   } as unknown as IncomingMessage;
 }
@@ -65,59 +64,76 @@ describe('HMAC session tokens & cross-site iframe cookies', () => {
     expect(header).toContain('Partitioned');
   });
 
-  it('recovers admin credentials from signed admin record cookie when env/disk are unset', async () => {
+  it('in production reads admin credentials strictly from env (never cookies or runtime files)', async () => {
+    const prevVercel = process.env.VERCEL;
     const prevUser = process.env.ADMIN_USERNAME;
     const prevHash = process.env.ADMIN_PASSWORD_HASH;
+    process.env.VERCEL = '1';
     delete process.env.ADMIN_USERNAME;
     delete process.env.ADMIN_PASSWORD_HASH;
 
     try {
-      const hash = hashPasswordScrypt('PasswordBaru123');
-      const setupReq = mockReq('127.0.0.1', { 'x-forwarded-proto': 'https' });
-      const cookieHeader = buildAdminRecordCookieHeader(
-        setupReq,
-        'admin-toko',
-        hash
-      );
-      const cookiePair = cookieHeader.split(';')[0];
-      expect(cookiePair.startsWith(`${ADMIN_RECORD_COOKIE_NAME}=`)).toBe(true);
+      const unsetCreds = await getActiveAdminCredentials();
+      expect(unsetCreds.source).toBe('unset');
 
-      const refreshReq = mockReq('127.0.0.1', { cookie: cookiePair });
-      const creds = await getActiveAdminCredentials(refreshReq);
-      expect(creds.source).toBe('runtime');
-      expect(creds.username).toBe('admin-toko');
-      expect(verifyPasswordScrypt('PasswordBaru123', creds.passwordHash)).toBe(
-        true
-      );
+      const hash = hashPasswordScrypt('EnvPassword123');
+      process.env.ADMIN_USERNAME = 'admin-env';
+      process.env.ADMIN_PASSWORD_HASH = hash;
+
+      const envCreds = await getActiveAdminCredentials();
+      expect(envCreds.source).toBe('env');
+      expect(envCreds.username).toBe('admin-env');
+      expect(verifyPasswordScrypt('EnvPassword123', envCreds.passwordHash)).toBe(true);
     } finally {
-      if (prevUser !== undefined) process.env.ADMIN_USERNAME = prevUser;
-      if (prevHash !== undefined) process.env.ADMIN_PASSWORD_HASH = prevHash;
+      if (prevVercel === undefined) delete process.env.VERCEL;
+      else process.env.VERCEL = prevVercel;
+      if (prevUser === undefined) delete process.env.ADMIN_USERNAME;
+      else process.env.ADMIN_USERNAME = prevUser;
+      if (prevHash === undefined) delete process.env.ADMIN_PASSWORD_HASH;
+      else process.env.ADMIN_PASSWORD_HASH = prevHash;
+    }
+  });
+
+  it('validates x-setup-token using constant-time comparison', () => {
+    const prevSetup = process.env.SETUP_TOKEN;
+    process.env.SETUP_TOKEN = 'super-secret-setup-token-123';
+    try {
+      expect(
+        isValidSetupToken(mockReq('127.0.0.1', { 'x-setup-token': 'super-secret-setup-token-123' }))
+      ).toBe(true);
+      expect(
+        isValidSetupToken(mockReq('127.0.0.1', { 'x-setup-token': 'wrong-token' }))
+      ).toBe(false);
+      expect(isValidSetupToken(mockReq('127.0.0.1'))).toBe(false);
+    } finally {
+      if (prevSetup === undefined) delete process.env.SETUP_TOKEN;
+      else process.env.SETUP_TOKEN = prevSetup;
     }
   });
 });
 
 describe('login rate limiter (5 attempts -> 5 minute lock)', () => {
-  it('locks after 5 consecutive failures and resets on clearLoginFailures', () => {
+  it('locks after 5 consecutive failures and resets on clearLoginFailures', async () => {
     const req = mockReq('10.0.0.42');
     const user = 'kasir-rate-test';
-    clearLoginFailures(req, user);
+    await clearLoginFailures(req, user);
 
     for (let i = 1; i <= 4; i++) {
-      const res = recordLoginFailure(req, user);
+      const res = await recordLoginFailure(req, user);
       expect(res.locked).toBe(false);
       expect(res.remainingAttempts).toBe(5 - i);
-      expect(checkLoginRateLimit(req, user).allowed).toBe(true);
+      expect((await checkLoginRateLimit(req, user)).allowed).toBe(true);
     }
 
-    const fifth = recordLoginFailure(req, user);
+    const fifth = await recordLoginFailure(req, user);
     expect(fifth.locked).toBe(true);
     expect(fifth.retryAfterSeconds).toBe(300);
 
-    const checkLocked = checkLoginRateLimit(req, user);
+    const checkLocked = await checkLoginRateLimit(req, user);
     expect(checkLocked.allowed).toBe(false);
     expect(checkLocked.retryAfterSeconds).toBeGreaterThan(0);
 
-    clearLoginFailures(req, user);
-    expect(checkLoginRateLimit(req, user).allowed).toBe(true);
+    await clearLoginFailures(req, user);
+    expect((await checkLoginRateLimit(req, user)).allowed).toBe(true);
   });
 });

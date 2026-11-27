@@ -1,4 +1,7 @@
-import { buildSessionCookieHeader } from './_lib/auth.js';
+import {
+  buildSessionCookieHeader,
+  ensureSessionSecretReady,
+} from './_lib/auth.js';
 import {
   type ApiRequest,
   type ApiResponse,
@@ -17,6 +20,10 @@ export default async function handler(
 
   if (!isValidCsrfOrigin(req)) {
     sendJson(res, 403, { error: 'Invalid request origin' });
+    return;
+  }
+
+  if (!ensureSessionSecretReady(res)) {
     return;
   }
 

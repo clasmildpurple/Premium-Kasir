@@ -93,14 +93,31 @@ export function parseCookies(req: IncomingMessage): Record<string, string> {
   return result;
 }
 
+function readHeaderString(val: string | string[] | undefined): string {
+  if (typeof val === 'string') return val.trim();
+  if (Array.isArray(val) && val.length > 0) {
+    return String(val[0] || '').trim();
+  }
+  return '';
+}
+
 export function getClientIp(req: IncomingMessage): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.trim()) {
-    return fwd.split(',')[0].trim();
+  const vercelFwd = readHeaderString(req.headers['x-vercel-forwarded-for']);
+  if (vercelFwd) {
+    const parts = vercelFwd
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 0) {
+      return parts[0];
+    }
   }
-  if (Array.isArray(fwd) && fwd[0]) {
-    return fwd[0].split(',')[0].trim();
+
+  const realIp = readHeaderString(req.headers['x-real-ip']);
+  if (realIp) {
+    return realIp;
   }
+
   return req.socket?.remoteAddress || 'unknown';
 }
 

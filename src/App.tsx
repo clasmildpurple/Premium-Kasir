@@ -44,11 +44,13 @@ import { CartPanel } from './components/CartPanel';
 import { BillsView } from './components/BillsView';
 import { PosCatalogView, SortOption } from './components/PosCatalogView';
 import { LogoutConfirmModal } from './components/LogoutConfirmModal';
+import { ConnectivityStatusBadge } from './components/ConnectivityStatusBadge';
 import { useAuth } from './hooks/useAuth';
 import { useCloudSync } from './hooks/useCloudSync';
 import { useProducts } from './hooks/useProducts';
 import { useOrders } from './hooks/useOrders';
 import {
+  GOOGLE_CONFIG_KEY,
   LOCAL_ORDERS_WARN_THRESHOLD,
   MAX_LOCAL_ORDERS,
   STORE_BRANDING_KEY,
@@ -58,6 +60,7 @@ import {
   loadInitialProducts,
   loadInitialStoreSettings,
   safeSetLocalStorageJson,
+  sanitizeGoogleConfig,
   sanitizeStoreSettings,
 } from './utils/storage';
 
@@ -122,6 +125,9 @@ export default function App() {
     isAuthenticated,
     isCheckingSession,
     needsAdminSetup,
+    cloudConfiguredOnServer,
+    setCloudConfiguredOnServer,
+    missingSessionSecret,
     cashierName,
     showOpeningAnim,
     setShowOpeningAnim,
@@ -512,7 +518,23 @@ export default function App() {
       ) : !isAuthenticated ? (
         <LoginView
           storeSettings={storeSettings}
+          googleConfig={googleConfig}
           needsSetup={needsAdminSetup}
+          cloudConfigured={isCloudConfigured || cloudConfiguredOnServer}
+          missingSessionSecret={missingSessionSecret}
+          onCloudConfigured={(sheetUrl) => {
+            setCloudConfiguredOnServer(true);
+            if (sheetUrl) {
+              safeSetLocalStorageJson(
+                GOOGLE_CONFIG_KEY,
+                sanitizeGoogleConfig({
+                  ...googleConfig,
+                  GOOGLE_SHEET_URL: sheetUrl,
+                }),
+                notifyStorageError
+              );
+            }
+          }}
           onToggleLanguage={handleToggleLanguage}
           onLoginSuccess={handleLoginSuccess}
         />
@@ -786,6 +808,25 @@ export default function App() {
           ) : (
             <>
               <main className="flex-1 min-w-0 flex flex-col h-full overflow-y-auto px-3 sm:px-5 lg:px-7 py-3 sm:py-5 lg:py-6">
+                <div className="flex items-center justify-end mb-2 shrink-0">
+                  <ConnectivityStatusBadge
+                    isOnline={isOnline}
+                    isDbConfigured={isDbConfigured}
+                    twoWaySyncStatus={twoWaySyncStatus}
+                    lastCloudSyncError={lastCloudSyncError}
+                    offlineQueueCount={offlineQueueCount}
+                    lastSyncedAt={lastTwoWaySyncAt || googleConfig.LAST_SYNCED}
+                    isId={isId}
+                    onSyncNow={() => {
+                      if (offlineQueueCount > 0) {
+                        void flushOfflineQueue();
+                      } else {
+                        void handleSyncTwoWay(true);
+                      }
+                    }}
+                    onOpenSettings={() => setActiveNav('setting')}
+                  />
+                </div>
                 <div
                   key={activeNav}
                   className="animate-menu-transition flex-1 flex flex-col min-w-0"
