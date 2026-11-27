@@ -111,7 +111,7 @@ export default async function handler(
       if (parsed.error === 'unauthorized') {
         sendJson(res, 502, {
           error:
-            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan API Token pada pengaturan database.',
+            'Token Apps Script ditolak (unauthorized). Pastikan API_TOKEN di Apps Script (Project Settings → Script Properties) sama persis dengan API Token di pengaturan database SukaPOS / env APPS_SCRIPT_TOKEN.',
         });
         return;
       }
@@ -209,7 +209,7 @@ export default async function handler(
       if (parsed.error === 'unauthorized') {
         sendJson(res, 502, {
           error:
-            'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan API Token pada pengaturan database.',
+            'Token Apps Script ditolak (unauthorized). Pastikan API_TOKEN di Apps Script (Project Settings → Script Properties) sama persis dengan API Token di pengaturan database SukaPOS / env APPS_SCRIPT_TOKEN.',
         });
         return;
       }

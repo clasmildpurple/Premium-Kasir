@@ -546,7 +546,11 @@ const PERMANENT_CONFIG = {
 };
 
 function verifyToken(providedToken) {
-  const expectedRaw = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
+  const props = PropertiesService.getScriptProperties();
+  const expectedRaw =
+    props.getProperty("API_TOKEN") ||
+    props.getProperty("APPS_SCRIPT_TOKEN") ||
+    props.getProperty("api_token");
   if (!expectedRaw || !providedToken) return false;
   const expected = String(expectedRaw).trim();
   const provided = String(providedToken).trim();

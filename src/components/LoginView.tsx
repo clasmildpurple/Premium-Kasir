@@ -125,7 +125,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     const trimmedUrl = appsScriptUrl.trim();
     const trimmedToken = appsScriptToken.trim();
-    if (!trimmedUrl || !trimmedToken) {
+    if (!trimmedUrl || (!trimmedToken && !localCloudConfigured)) {
       setDbErrorMsg(
         isId
           ? 'URL Web App Apps Script (/exec) dan API Token wajib diisi.'
@@ -1058,13 +1058,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <div className="relative flex-1">
                   <input
                     type={showToken ? 'text' : 'password'}
-                    required
+                    required={!localCloudConfigured}
                     value={appsScriptToken}
                     onChange={(e) => setAppsScriptToken(e.target.value)}
                     placeholder={
-                      isId
-                        ? 'Samakan dengan API_TOKEN di Script Properties'
-                        : 'Match API_TOKEN in Script Properties'
+                      localCloudConfigured
+                        ? isId
+                          ? '•••••••• (Sudah tersimpan di server — kosongkan jika tidak diubah)'
+                          : '•••••••• (Already saved — leave blank to keep)'
+                        : isId
+                        ? 'Tempel token yang sama dengan API_TOKEN di Apps Script'
+                        : 'Paste the exact same token as API_TOKEN in Apps Script'
                     }
                     className="w-full bg-[#F8F9FA] border border-slate-200 rounded-xl pl-3.5 pr-9 py-2.5 text-xs font-mono text-[#2D3748] focus:outline-none focus:border-slate-400"
                   />

@@ -73,7 +73,7 @@ async function probeAppsScriptConnection(params: {
       return {
         connectionOk: false,
         connectionError:
-          'Token Apps Script ditolak (unauthorized). Periksa API_TOKEN di Script Properties dan samakan dengan API Token di sini.',
+          'Token Apps Script ditolak (unauthorized). Pastikan API_TOKEN di Apps Script (Project Settings → Script Properties) sama persis dengan API Token yang Anda masukkan di SukaPOS / env APPS_SCRIPT_TOKEN.',
       };
     }
 
