@@ -6,4 +6,3 @@ tests/
 database.config.json
 server.ts
 server.js
-scripts/
